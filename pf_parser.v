@@ -1,0 +1,1041 @@
+module main
+
+fn parse_pf_conf(content string) !PfConfig {
+	mut lexer := new_lexer(content)
+	tokens := lexer.tokenize()
+	
+	mut config := PfConfig{}
+	mut i := 0
+	
+	for i < tokens.len {
+		token := tokens[i]
+		
+		
+		match token.type_ {
+			.comment {
+				config.comments << PfComment{
+					line_num: token.line
+					content: token.value
+					position: 'standalone'
+				}
+				i++
+			}
+			.identifier {
+				if i + 2 < tokens.len && tokens[i + 1].type_ == .assign {
+					config.macros << PfMacro{
+						name: token.value
+						value: tokens[i + 2].value
+					}
+					i += 3
+				} else {
+					i++
+				}
+			}
+			.set {
+				if i + 1 < tokens.len {
+					option_name := tokens[i + 1].value
+					
+					// Handle different option formats
+					if option_name == 'skip' && i + 3 < tokens.len && tokens[i + 2].value == 'on' {
+						// set skip on interface
+						interface_name := tokens[i + 3].value
+						config.options << PfOption{
+							option: 'skip'
+							value: 'on ${interface_name}'
+						}
+						i += 4
+					} else if i + 2 < tokens.len {
+						// set option value
+						config.options << PfOption{
+							option: option_name
+							value: if tokens[i + 2].type_ == .string_literal { tokens[i + 2].value } else { tokens[i + 2].value }
+						}
+						i += 3
+					} else {
+						i++
+					}
+				} else {
+					i++
+				}
+			}
+			.table {
+				// Parse table definition: table <name> { entries } or table <name> persist
+				if i + 3 < tokens.len && tokens[i + 1].type_ == .lt && tokens[i + 3].type_ == .gt {
+					table_name := tokens[i + 2].value
+					mut entries := []string{}
+					mut persist := false
+					mut j := i + 4
+					
+					// Check if next token is 'persist'
+					if j < tokens.len && tokens[j].type_ == .persist {
+						persist = true
+						j++
+					} else if j < tokens.len && tokens[j].type_ == .lbrace {
+						// Parse entries in braces
+						j++ // skip '{'
+						for j < tokens.len && tokens[j].type_ != .rbrace {
+							if tokens[j].type_ == .number || tokens[j].type_ == .identifier || tokens[j].type_ == .string_literal {
+								entries << tokens[j].value
+							}
+							j++
+						}
+						if j < tokens.len && tokens[j].type_ == .rbrace {
+							j++ // skip '}'
+						}
+					}
+					
+					config.tables << PfTable{
+						name: table_name
+						entries: entries
+						persist: persist
+					}
+					i = j
+				} else {
+					i++
+				}
+			}
+			else {
+				i++
+			}
+		}
+	}
+	
+	return config
+}
+
+fn parse_pf_conf_lines(content string) ![]PfLine {
+	lines := content.split('\n')
+	mut pf_lines := []PfLine{}
+	
+	for i, line in lines {
+		line_num := i + 1
+		trimmed := line.trim_space()
+		
+		mut pf_line := PfLine{
+			line_num: line_num
+		}
+		
+		if trimmed == '' {
+			pf_line.line_type = 'blank'
+		} else if trimmed.starts_with('#') {
+			pf_line.line_type = 'comment'
+			// Store the original line for comments to preserve exact formatting (dashes, spaces, etc.)
+			pf_line.raw_line = line
+		} else {
+			// Try to classify the line type based on content
+			if trimmed.contains(' = ') {
+				pf_line.line_type = 'macro'
+				
+				// Smart formatting detection for macros
+				eq_pos := line.index(' = ') or { -1 }
+				if eq_pos > 0 {
+					left_part := line[..eq_pos]
+					right_part := line[eq_pos + 3..]
+					
+					// Check if there's extra formatting (multiple spaces before =)
+					name_trimmed := left_part.trim_space()
+					value_trimmed := right_part.trim_space().trim('"')
+					
+					// Detect if formatting has multiple spaces (alignment)
+					has_formatting := left_part != name_trimmed || (eq_pos - name_trimmed.len > 1)
+					
+					pf_line.name = name_trimmed
+					pf_line.value = value_trimmed
+					
+					// Store original content if formatted, otherwise reconstruct
+					if has_formatting {
+						pf_line.raw_line = line
+					}
+				}
+			} else if trimmed.starts_with('table ') {
+				pf_line.line_type = 'table'
+				// Parse table components
+				table_name, table_values, table_persist := parse_table_line(line)
+				pf_line.name = table_name
+				pf_line.values = table_values
+				pf_line.persist = table_persist
+				pf_line.raw_line = line  // Preserve original line for exact formatting
+				// Extract inline comment if present
+				_, inline_comment := extract_inline_comment(line)
+				if inline_comment != '' {
+					pf_line.comment = inline_comment
+				}
+			} else if trimmed.starts_with('nat ') || trimmed.starts_with('rdr ') || trimmed.starts_with('no nat ') {
+				pf_line.line_type = if trimmed.starts_with('nat ') || trimmed.starts_with('no nat ') { 'nat' } else { 'rdr' }
+
+				// Parse NAT/RDR components
+				if trimmed.starts_with('nat ') || trimmed.starts_with('no nat ') {
+					rule_type, direction, quick, log, iface, inet_family, protocol, source, destination, ports, options, label, tag, tagged, dup_to := parse_nat_rule_line(line)
+					pf_line.rule_type = rule_type
+					pf_line.direction = direction
+					pf_line.quick = quick
+					pf_line.log = log
+					pf_line.interfaces = parse_interface_array(iface)
+					pf_line.inet_families = parse_inet_family_array(inet_family)
+					pf_line.protocols = parse_protocol_array(protocol)
+					pf_line.sources = parse_source_array(source)
+					pf_line.destinations = parse_destination_array(destination)
+					pf_line.ports = parse_port_array(ports)
+					pf_line.options = options
+					pf_line.label = label
+					pf_line.tag = tag
+					pf_line.tagged = tagged
+					pf_line.dup_to = dup_to
+				} else {
+					// RDR parsing
+					rule_type, direction, quick, iface, inet_family, protocol, source, destination, ports, options, label, tag, tagged, dup_to := parse_rdr_rule_line(line)
+					pf_line.rule_type = rule_type
+					pf_line.direction = direction
+					pf_line.quick = quick
+					pf_line.interfaces = parse_interface_array(iface)
+					pf_line.inet_families = parse_inet_family_array(inet_family)
+					pf_line.protocols = parse_protocol_array(protocol)
+					pf_line.sources = parse_source_array(source)
+					pf_line.destinations = parse_destination_array(destination)
+					pf_line.ports = parse_port_array(ports)
+					pf_line.options = options
+					pf_line.label = label
+					pf_line.tag = tag
+					pf_line.tagged = tagged
+					pf_line.dup_to = dup_to
+				}
+				
+				pf_line.raw_line = line  // Preserve original line for exact formatting
+				// Extract inline comment if present
+				_, inline_comment := extract_inline_comment(line)
+				if inline_comment != '' {
+					pf_line.comment = inline_comment
+				}
+			} else if trimmed.starts_with('set ') {
+				pf_line.line_type = 'option'
+				// Parse option components
+				option_name, option_value := parse_option_line(line)
+				pf_line.option_name = option_name
+				pf_line.option_value = option_value
+				pf_line.raw_line = line  // Preserve original line for exact formatting
+				// Extract inline comment if present
+				_, inline_comment := extract_inline_comment(line)
+				if inline_comment != '' {
+					pf_line.comment = inline_comment
+				}
+			} else if trimmed.starts_with('antispoof ') {
+				pf_line.line_type = 'antispoof'
+				// Parse antispoof components
+				antispoof_options, antispoof_interface, has_log := parse_antispoof_line(line)
+				pf_line.antispoof = antispoof_options
+				pf_line.interfaces = [antispoof_interface]
+				pf_line.log = has_log
+				pf_line.raw_line = line  // Preserve original line for exact formatting
+				// Extract inline comment if present
+				_, inline_comment := extract_inline_comment(line)
+				if inline_comment != '' {
+					pf_line.comment = inline_comment
+				}
+			} else if trimmed.starts_with('pass ') || trimmed.starts_with('block ') {
+				pf_line.line_type = 'rule'
+				pf_line.raw_line = line  // Preserve original line for exact formatting
+				// Extract inline comment first
+				_, inline_comment := extract_inline_comment(line)
+				if inline_comment != '' {
+					pf_line.comment = inline_comment
+				}
+
+				// Parse rule components
+				action, direction, quick, iface, inet_family, protocol, source, destination, port, options, label, tag, tagged, dup_to, icmp_type, icmp6_type := parse_rule_line(line)
+				pf_line.action = action
+				pf_line.direction = direction
+				pf_line.quick = quick
+				pf_line.inet_families = parse_inet_family_array(inet_family)
+				pf_line.interfaces = parse_interface_array(iface)
+				pf_line.protocols = parse_protocol_array(protocol)
+				pf_line.sources = parse_source_array(source)
+				pf_line.destinations = parse_destination_array(destination)
+				pf_line.ports = parse_port_array(port)
+				pf_line.options = options
+				pf_line.label = label
+				pf_line.tag = tag
+				pf_line.tagged = tagged
+				pf_line.dup_to = dup_to
+				pf_line.icmp_type = icmp_type
+				pf_line.icmp6_type = icmp6_type
+			} else {
+				pf_line.line_type = 'unknown'
+				pf_line.raw_line = line  // Preserve original line for exact formatting
+				// Extract inline comment if present
+				_, inline_comment := extract_inline_comment(line)
+				if inline_comment != '' {
+					pf_line.comment = inline_comment
+				}
+			}
+		}
+		
+		pf_lines << pf_line
+	}
+	
+	return pf_lines
+}
+
+// Extract inline comment from a line
+fn extract_inline_comment(line string) (string, string) {
+	// Find the last '#' that's not inside quotes
+	mut in_quotes := false
+	mut quote_char := `"`
+	
+	for i := line.len - 1; i >= 0; i-- {
+		ch := line[i]
+		if ch == `"` || ch == `'` {
+			if !in_quotes {
+				in_quotes = true
+				quote_char = ch
+			} else if ch == quote_char {
+				in_quotes = false
+			}
+		} else if ch == `#` && !in_quotes {
+			// Found inline comment
+			rule_part := line[..i].trim_right(' \t')
+			comment_part := line[i + 1..].trim_space()
+			return rule_part, comment_part
+		}
+	}
+	
+	// No inline comment found
+	return line, ''
+}
+
+fn parse_rule_line(line string) (string, string, bool, string, string, string, string, string, string, []string, string, string, string, string, string, string) {
+	// Remove inline comment first
+	rule_part, _ := extract_inline_comment(line)
+	
+	// Split into tokens (simple space-based for now)
+	parts := rule_part.trim_space().split(' ')
+	if parts.len == 0 {
+		return '', '', false, '', '', '', '', '', '', []string{}, '', '', '', '', '', ''
+	}
+	
+	mut action := ''
+	mut direction := ''
+	mut quick := false
+	mut iface := ''
+	mut inet_family := ''
+	mut protocol := ''
+	mut source := ''
+	mut destination := ''
+	mut port := ''
+	mut options := []string{}
+	mut label := ''
+	mut tag := ''
+	mut tagged := ''
+	mut dup_to := ''
+	mut icmp_type := ''
+	mut icmp6_type := ''
+	
+	mut i := 0
+	
+	// Parse action (pass/block)
+	if i < parts.len {
+		action = parts[i]
+		i++
+	}
+	
+	// Parse remaining components
+	for i < parts.len {
+		part := parts[i]
+		
+		match part {
+			'in', 'out' {
+				direction = part
+				i++
+			}
+			'quick' {
+				quick = true
+				i++
+			}
+			'on' {
+				if i + 1 < parts.len {
+					i++
+					iface = parts[i]
+					i++
+				} else {
+					i++
+				}
+			}
+			'proto' {
+				if i + 1 < parts.len {
+					i++
+					// Handle complex protocols like { tcp, udp }
+					if parts[i].starts_with('{') {
+						mut proto_parts := []string{}
+						for i < parts.len && !parts[i].ends_with('}') {
+							proto_parts << parts[i]
+							i++
+						}
+						if i < parts.len {
+							proto_parts << parts[i] // include the closing brace
+							i++
+						}
+						protocol = proto_parts.join(' ')
+					} else {
+						protocol = parts[i]
+						i++
+					}
+				} else {
+					i++
+				}
+			}
+			'inet' {
+				inet_family = 'inet'
+				i++
+			}
+			'inet6' {
+				inet_family = 'inet6'
+				i++
+			}
+			'from' {
+				if i + 1 < parts.len {
+					i++
+					// Handle complex sources like { <vpn-trusted> } or { addr1, addr2 }
+					if parts[i].starts_with('{') || parts[i].starts_with('<') {
+						mut src_parts := []string{}
+						for i < parts.len && !parts[i].ends_with('}') && !parts[i].ends_with('>') {
+							src_parts << parts[i]
+							i++
+						}
+						if i < parts.len {
+							src_parts << parts[i] // include the closing brace/bracket
+							i++
+						}
+						source = src_parts.join(' ')
+					} else {
+						source = parts[i]
+						i++
+					}
+				} else {
+					i++
+				}
+			}
+			'to' {
+				if i + 1 < parts.len {
+					i++
+					// Handle complex destinations
+					if parts[i].starts_with('{') || parts[i].starts_with('<') {
+						mut dst_parts := []string{}
+						for i < parts.len && !parts[i].ends_with('}') && !parts[i].ends_with('>') {
+							dst_parts << parts[i]
+							i++
+						}
+						if i < parts.len {
+							dst_parts << parts[i] // include the closing brace/bracket
+							i++
+						}
+						destination = dst_parts.join(' ')
+					} else {
+						destination = parts[i]
+						i++
+					}
+				} else {
+					i++
+				}
+			}
+			'port' {
+				if i + 1 < parts.len {
+					i++
+					// Handle complex ports like { 80, 443 }
+					if parts[i].starts_with('{') {
+						mut port_parts := []string{}
+						for i < parts.len && !parts[i].ends_with('}') {
+							port_parts << parts[i]
+							i++
+						}
+						if i < parts.len {
+							port_parts << parts[i] // include the closing brace
+							i++
+						}
+						port = port_parts.join(' ')
+					} else {
+						port = parts[i]
+						i++
+					}
+				} else {
+					i++
+				}
+			}
+			'keep' {
+				if i + 1 < parts.len && parts[i + 1] == 'state' {
+					options << 'keep state'
+					i += 2
+				} else {
+					i++
+				}
+			}
+			'log' {
+				options << 'log'
+				i++
+			}
+			'label' {
+				if i + 1 < parts.len {
+					i++
+					label = parts[i]
+					i++
+				} else {
+					i++
+				}
+			}
+			'tag' {
+				if i + 1 < parts.len {
+					i++
+					tag = parts[i]
+					i++
+				} else {
+					i++
+				}
+			}
+			'tagged' {
+				if i + 1 < parts.len {
+					i++
+					tagged = parts[i]
+					i++
+				} else {
+					i++
+				}
+			}
+			'dup-to' {
+				if i + 1 < parts.len {
+					i++
+					// Handle dup-to destinations like ($ext_if 192.168.1.1)
+					if parts[i].starts_with('(') {
+						mut dup_parts := []string{}
+						for i < parts.len && !parts[i].ends_with(')') {
+							dup_parts << parts[i]
+							i++
+						}
+						if i < parts.len {
+							dup_parts << parts[i] // include the closing paren
+							i++
+						}
+						dup_to = dup_parts.join(' ')
+					} else {
+						dup_to = parts[i]
+						i++
+					}
+				} else {
+					i++
+				}
+			}
+			'icmp-type' {
+				if i + 1 < parts.len {
+					i++
+					// Handle braced expressions like "{ echoreq, echorep }"
+					if parts[i].starts_with('{') {
+						mut icmp_parts := []string{}
+						for i < parts.len {
+							icmp_parts << parts[i]
+							if parts[i].ends_with('}') {
+								break
+							}
+							i++
+						}
+						icmp_type = icmp_parts.join(' ')
+					} else {
+						icmp_type = parts[i]
+					}
+					i++
+				} else {
+					i++
+				}
+			}
+			'icmp6-type' {
+				if i + 1 < parts.len {
+					i++
+					// Handle braced expressions like "{ neighbrsol, neighbradv }"
+					if parts[i].starts_with('{') {
+						mut icmp6_parts := []string{}
+						for i < parts.len {
+							icmp6_parts << parts[i]
+							if parts[i].ends_with('}') {
+								break
+							}
+							i++
+						}
+						icmp6_type = icmp6_parts.join(' ')
+					} else {
+						icmp6_type = parts[i]
+					}
+					i++
+				} else {
+					i++
+				}
+			}
+			else {
+				// Skip unknown tokens
+				i++
+			}
+		}
+	}
+	
+	return action, direction, quick, iface, inet_family, protocol, source, destination, port, options, label, tag, tagged, dup_to, icmp_type, icmp6_type
+}
+
+// Parse NAT rule line into components (e.g., "nat pass log on eth0 from { 192.168.1.0/24 } to { any } -> (eth0)")
+fn parse_nat_rule_line(line string) (string, string, bool, bool, string, string, string, string, string, string, []string, string, string, string, string) {
+	mut action := 'nat'
+	mut direction := ''
+	mut quick := false
+	mut log := false
+	mut iface := ''
+	mut inet_family := ''
+	mut protocol := ''
+	mut source := ''
+	mut destination := ''
+	mut port := ''
+	mut options := []string{}
+	mut label := ''
+	mut tag := ''
+	mut tagged := ''
+	mut dup_to := ''
+	
+	// Parse the initial NAT rule type and options
+	if line.starts_with('no nat') {
+		action = 'no nat'
+	} else if line.contains('nat pass log') {
+		action = 'pass'
+		log = true
+	} else if line.contains('nat log') {
+		action = 'nat'
+		log = true
+	} else if line.contains('nat pass') {
+		action = 'pass'
+	} else {
+		action = 'nat'
+	}
+	
+	// Extract components using regex-like parsing
+	parts := line.split(' ')
+	mut i := 0
+	
+	for i < parts.len {
+		match parts[i] {
+			'on' {
+				if i + 1 < parts.len {
+					i++
+					iface = parts[i]
+				}
+			}
+			'from' {
+				if i + 1 < parts.len {
+					i++
+					// Handle complex source specifications like { $net_dmz }
+					mut source_parts := []string{}
+					if parts[i].starts_with('{') {
+						// Collect all parts until we find the closing }
+						for i < parts.len && !parts[i].ends_with('}') {
+							source_parts << parts[i]
+							i++
+						}
+						if i < parts.len {
+							source_parts << parts[i] // Add the closing part
+						}
+						source_raw := source_parts.join(' ')
+						// Keep the braced format for array parsing
+						source = source_raw
+					} else {
+						source = parts[i]
+					}
+				}
+			}
+			'to' {
+				if i + 1 < parts.len {
+					i++
+					// Handle complex destination specifications like { 192.168.178.4 }
+					mut dest_parts := []string{}
+					if parts[i].starts_with('{') {
+						// Collect all parts until we find the closing }
+						for i < parts.len && !parts[i].ends_with('}') {
+							dest_parts << parts[i]
+							i++
+						}
+						if i < parts.len {
+							dest_parts << parts[i] // Add the closing part
+						}
+						dest_raw := dest_parts.join(' ')
+						// Keep the braced format for array parsing
+						destination = dest_raw
+					} else {
+						// Handle destination until -> or end
+						for i < parts.len && parts[i] != '->' {
+							dest_parts << parts[i]
+							i++
+						}
+						if dest_parts.len > 0 {
+							destination = dest_parts.join(' ')
+						}
+						i-- // Adjust for the outer loop increment
+					}
+				}
+			}
+			else {}
+		}
+		i++
+	}
+	
+	return action, direction, quick, log, iface, inet_family, protocol, source, destination, port, options, label, tag, tagged, dup_to
+}
+
+// Parse RDR rule line into components (e.g., "rdr on eth0 proto tcp from any to 192.168.1.1 port 80 -> 10.0.0.1 port 8080")
+fn parse_rdr_rule_line(line string) (string, string, bool, string, string, string, string, string, string, []string, string, string, string, string) {
+	mut action := ''  // Start with empty action
+	mut direction := ''
+	mut quick := false
+	mut iface := ''
+	mut inet_family := ''
+	mut protocol := ''
+	mut source := ''
+	mut destination := ''
+	mut port := ''
+	mut options := []string{}
+	mut label := ''
+	mut tag := ''
+	mut tagged := ''
+	mut dup_to := ''
+	
+	// Detect "pass" action in RDR rules
+	if line.contains('rdr pass ') {
+		action = 'pass'
+	}
+	// If no pass is found, action remains empty (will be omitted due to @[omitempty])
+	
+	// Extract components using regex-like parsing
+	parts := line.split(' ')
+	mut i := 0
+	
+	for i < parts.len {
+		match parts[i] {
+			'on' {
+				if i + 1 < parts.len {
+					i++
+					iface = parts[i]
+				}
+			}
+			'proto' {
+				if i + 1 < parts.len {
+					i++
+					protocol = parts[i]
+				}
+			}
+			'from' {
+				if i + 1 < parts.len {
+					i++
+					// Handle complex source specifications like { 172.16.0.65 }
+					mut source_parts := []string{}
+					if parts[i].starts_with('{') {
+						// Collect all parts until we find the closing }
+						for i < parts.len && !parts[i].ends_with('}') {
+							source_parts << parts[i]
+							i++
+						}
+						if i < parts.len {
+							source_parts << parts[i] // Add the closing part
+						}
+						source = source_parts.join(' ')
+					} else {
+						source = parts[i]
+					}
+				}
+			}
+			'to' {
+				if i + 1 < parts.len {
+					i++
+					// Handle destination until 'port' or '->'
+					mut dest_parts := []string{}
+					for i < parts.len && parts[i] != 'port' && parts[i] != '->' {
+						dest_parts << parts[i]
+						i++
+					}
+					if dest_parts.len > 0 {
+						destination = dest_parts.join(' ')
+					}
+					i-- // Adjust for the outer loop increment
+				}
+			}
+			'port' {
+				if i + 1 < parts.len {
+					i++
+					// Check if this is source port or destination port
+					if parts[i-2] == 'to' || (i > 2 && parts[i-3] == 'to') {
+						// Handle complex port specifications like { ldap, ldaps }
+						mut port_parts := []string{}
+						if parts[i].starts_with('{') {
+							// Collect all parts until we find the closing }
+							for i < parts.len && !parts[i].ends_with('}') {
+								port_parts << parts[i]
+								i++
+							}
+							if i < parts.len {
+								port_parts << parts[i] // Add the closing part
+							}
+							port = port_parts.join(' ')
+						} else {
+							port = parts[i]
+						}
+					}
+				}
+			}
+			else {}
+		}
+		i++
+	}
+	
+	return action, direction, quick, iface, inet_family, protocol, source, destination, port, options, label, tag, tagged, dup_to
+}
+
+// Parse protocol string into array (e.g., "{ tcp, udp }" -> ["tcp", "udp"])
+fn parse_protocol_array(protocol_str string) []string {
+	if protocol_str == '' {
+		return []
+	}
+	
+	trimmed := protocol_str.trim_space()
+	
+	// Handle protocol lists like "{ tcp, udp }"
+	if trimmed.starts_with('{') && trimmed.ends_with('}') {
+		inner := trimmed[1..trimmed.len-1].trim_space()
+		parts := inner.split(',')
+		mut protocols := []string{}
+		for part in parts {
+			cleaned := part.trim_space()
+			if cleaned != '' {
+				protocols << cleaned
+			}
+		}
+		return protocols
+	} else {
+		// Single protocol
+		return [trimmed]
+	}
+}
+
+// Parse port string into array (e.g., "{ 80, 443 }" -> ["80", "443"])
+fn parse_port_array(port_str string) []string {
+	if port_str == '' {
+		return []
+	}
+	
+	trimmed := port_str.trim_space()
+	
+	// Handle port lists like "{ 80, 443 }" or "{ http, https }"
+	if trimmed.starts_with('{') && trimmed.ends_with('}') {
+		inner := trimmed[1..trimmed.len-1].trim_space()
+		parts := inner.split(',')
+		mut ports := []string{}
+		for part in parts {
+			cleaned := part.trim_space()
+			if cleaned != '' {
+				ports << cleaned
+			}
+		}
+		return ports
+	} else {
+		// Single port or port range
+		return [trimmed]
+	}
+}
+
+// Parse inet family string into array (handles "inet", "inet6", or empty)
+fn parse_inet_family_array(inet_family_str string) []string {
+	if inet_family_str == '' {
+		return []
+	}
+	
+	trimmed := inet_family_str.trim_space()
+	return [trimmed]
+}
+
+// Parse source string into array (e.g., "{ addr1, addr2 }" -> ["addr1", "addr2"])
+fn parse_source_array(source_str string) []string {
+	if source_str == '' {
+		return []
+	}
+	
+	trimmed := source_str.trim_space()
+	
+	// Handle source lists like "{ addr1, addr2 }" or "{ !addr1, !addr2 }"
+	if trimmed.starts_with('{') && trimmed.ends_with('}') {
+		inner := trimmed[1..trimmed.len-1].trim_space()
+		parts := inner.split(',')
+		mut sources := []string{}
+		for part in parts {
+			cleaned := part.trim_space()
+			if cleaned != '' {
+				sources << cleaned
+			}
+		}
+		return sources
+	} else {
+		// Single source
+		return [trimmed]
+	}
+}
+
+// Parse interface string into array (e.g., "{ eth0, eth1 }" -> ["eth0", "eth1"])
+fn parse_interface_array(interface_str string) []string {
+	if interface_str == '' {
+		return []
+	}
+	
+	trimmed := interface_str.trim_space()
+	
+	// Handle interface lists like "{ eth0, eth1 }"
+	if trimmed.starts_with('{') && trimmed.ends_with('}') {
+		inner := trimmed[1..trimmed.len-1].trim_space()
+		parts := inner.split(',')
+		mut interfaces := []string{}
+		for part in parts {
+			cleaned := part.trim_space()
+			if cleaned != '' {
+				interfaces << cleaned
+			}
+		}
+		return interfaces
+	} else {
+		// Single interface
+		return [trimmed]
+	}
+}
+
+// Parse destination string into array (e.g., "{ addr1, addr2 }" -> ["addr1", "addr2"])
+fn parse_destination_array(destination_str string) []string {
+	if destination_str == '' {
+		return []
+	}
+	
+	trimmed := destination_str.trim_space()
+	
+	// Handle destination lists like "{ addr1, addr2 }" or "{ !addr1, !addr2 }"
+	if trimmed.starts_with('{') && trimmed.ends_with('}') {
+		inner := trimmed[1..trimmed.len-1].trim_space()
+		parts := inner.split(',')
+		mut destinations := []string{}
+		for part in parts {
+			cleaned := part.trim_space()
+			if cleaned != '' {
+				destinations << cleaned
+			}
+		}
+		return destinations
+	} else {
+		// Single destination
+		return [trimmed]
+	}
+}
+
+// Parse antispoof line into components (e.g., "antispoof log for $ext_if" -> (["quick"], "$ext_if", true))
+fn parse_antispoof_line(line string) ([]string, string, bool) {
+	trimmed := line.trim_space()
+	
+	// Remove "antispoof " prefix
+	if !trimmed.starts_with('antispoof ') {
+		return []string{}, '', false
+	}
+	
+	rest := trimmed[10..].trim_space() // Remove "antispoof "
+	parts := rest.split(' ')
+	
+	mut options := []string{}
+	mut iface := ''
+	mut has_log := false
+	
+	// Parse options and interface
+	for i, part in parts {
+		if part == 'for' && i + 1 < parts.len {
+			// Everything before 'for' are options, after 'for' is interface
+			for option in parts[..i] {
+				if option == 'log' {
+					has_log = true
+				} else {
+					options << option
+				}
+			}
+			iface = parts[i + 1]
+			break
+		}
+	}
+	
+	// If no 'for' found, assume last part is interface and rest are options
+	if iface == '' && parts.len > 0 {
+		iface = parts[parts.len - 1]
+		if parts.len > 1 {
+			for option in parts[..parts.len - 1] {
+				if option == 'log' {
+					has_log = true
+				} else {
+					options << option
+				}
+			}
+		}
+	}
+	
+	return options, iface, has_log
+}
+
+// Parse option/set line into components (e.g., "set skip on lo" -> ("skip", "on lo"))
+fn parse_option_line(line string) (string, string) {
+	trimmed := line.trim_space()
+	
+	// Remove "set " prefix
+	if !trimmed.starts_with('set ') {
+		return '', ''
+	}
+	
+	rest := trimmed[4..].trim_space() // Remove "set "
+	parts := rest.split(' ')
+	
+	if parts.len == 0 {
+		return '', ''
+	}
+	
+	option_name := parts[0]
+	option_value := if parts.len > 1 { parts[1..].join(' ') } else { '' }
+	
+	return option_name, option_value
+}
+
+// Parse table line into components (e.g., "table <blocklist> { 97.107.130.116 }" or "table <fleximus.de-dyn> persist")
+fn parse_table_line(line string) (string, []string, bool) {
+	mut table_name := ''
+	mut table_values := []string{}
+	mut table_persist := false
+	
+	// Extract table name from < >
+	if line.contains('<') && line.contains('>') {
+		start := line.index('<') or { 0 }
+		end := line.index('>') or { 0 }
+		if end > start {
+			table_name = line[start+1..end]
+		}
+	}
+	
+	// Check for persist keyword
+	if line.contains(' persist') {
+		table_persist = true
+	}
+	
+	// Extract values from { } if present
+	if line.contains('{') && line.contains('}') {
+		start := line.index('{') or { 0 }
+		end := line.index('}') or { 0 }
+		if end > start {
+			values_str := line[start+1..end].trim_space()
+			if values_str != '' {
+				parts := values_str.split(',')
+				for part in parts {
+					cleaned := part.trim_space()
+					if cleaned != '' {
+						table_values << cleaned
+					}
+				}
+			}
+		}
+	}
+	
+	return table_name, table_values, table_persist
+}
+
