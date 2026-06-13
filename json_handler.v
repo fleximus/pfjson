@@ -4,17 +4,11 @@ import json
 import crypto.sha256
 import crypto.sha512
 
-fn encode_pf_to_json(config Config) ! {
-	content := read_input_content(config.input)!
-	
-	metadata := if config.input == '-' {
-		generate_stdin_metadata(content)
-	} else {
-		generate_file_metadata(config.input)!
-	}
-
-	if config.check {
-		if config.json_output {
+// report_check_result prints the outcome of a syntax check and exits with a
+// non-zero status if any errors were found.
+fn report_check_result(errors []ValidationError, json_output bool) {
+	if errors.len == 0 {
+		if json_output {
 			response := JsonResponse{
 				success: true
 				message: 'Syntax check passed'
@@ -24,6 +18,46 @@ fn encode_pf_to_json(config Config) ! {
 			println('Syntax check: OK')
 		}
 		return
+	}
+
+	if json_output {
+		mut details := []string{}
+		for e in errors {
+			details << 'line ${e.line_num}: ${e.message}'
+		}
+		response := JsonResponse{
+			success: false
+			message: 'Syntax check failed: ${errors.len} error(s)'
+			error: details.join('; ')
+		}
+		eprintln(json.encode(response))
+	} else {
+		eprintln('Syntax check: FAILED (${errors.len} error(s))')
+		for e in errors {
+			if e.content != '' {
+				eprintln('  line ${e.line_num}: ${e.message}: ${e.content}')
+			} else {
+				eprintln('  line ${e.line_num}: ${e.message}')
+			}
+		}
+	}
+	exit(1)
+}
+
+fn encode_pf_to_json(config Config) ! {
+	content := read_input_content(config.input)!
+	
+	if config.check {
+		check_lines := parse_pf_conf_lines(content)!
+		errors := validate_pf_lines(check_lines)
+		report_check_result(errors, config.json_output)
+		return
+	}
+
+	metadata := if config.input == '-' {
+		generate_stdin_metadata(content)
+	} else {
+		generate_file_metadata(config.input)!
 	}
 
 	// Use line-by-line parsing as primary method
@@ -69,15 +103,8 @@ fn decode_json_to_pf(config Config) ! {
 	pf_json := json.decode(PfJsonOutput, json_content)!
 
 	if config.check {
-		if config.json_output {
-			response := JsonResponse{
-				success: true
-				message: 'JSON syntax check passed'
-			}
-			println(json.encode(response))
-		} else {
-			println('Syntax check: OK')
-		}
+		errors := validate_pf_lines(pf_json.lines)
+		report_check_result(errors, config.json_output)
 		return
 	}
 

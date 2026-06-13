@@ -936,3 +936,58 @@ fn parse_table_line(line string) (string, []string, bool) {
 	return table_name, table_values, table_persist
 }
 
+// A single problem found during a check-mode validation pass.
+struct ValidationError {
+	line_num int
+	content  string
+	message  string
+}
+
+// validate_pf_lines performs a best-effort syntax check over parsed lines.
+// It returns one entry per problem found; an empty slice means the input is clean.
+// Note: this validates what pfjson can recognize. Lines it cannot classify are
+// reported as errors, since the tool cannot vouch for their syntax.
+fn validate_pf_lines(lines []PfLine) []ValidationError {
+	mut errors := []ValidationError{}
+	for line in lines {
+		match line.line_type {
+			'unknown' {
+				errors << ValidationError{
+					line_num: line.line_num
+					content: line.raw_line
+					message: 'unrecognized or unsupported syntax'
+				}
+			}
+			'macro' {
+				if line.name == '' {
+					errors << ValidationError{
+						line_num: line.line_num
+						content: line.raw_line
+						message: 'macro is missing a name'
+					}
+				}
+			}
+			'table' {
+				if line.name == '' {
+					errors << ValidationError{
+						line_num: line.line_num
+						content: line.raw_line
+						message: 'table is missing a name'
+					}
+				}
+			}
+			'rule' {
+				if line.action != 'pass' && line.action != 'block' {
+					errors << ValidationError{
+						line_num: line.line_num
+						content: line.raw_line
+						message: 'rule must start with "pass" or "block"'
+					}
+				}
+			}
+			else {}
+		}
+	}
+	return errors
+}
+
