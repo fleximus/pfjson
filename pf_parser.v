@@ -1,5 +1,25 @@
 module main
 
+// looks_like_macro reports whether a trimmed line is a macro definition,
+// i.e. an identifier followed by '=' (with optional surrounding whitespace),
+// such as 'ext_if = "em0"' or 'ext_if="em0"'. This avoids misclassifying
+// rules that merely contain '=' (e.g. 'pass ... user = 1000').
+fn looks_like_macro(trimmed string) bool {
+	mut i := 0
+	for i < trimmed.len && (trimmed[i].is_letter() || trimmed[i].is_digit() || trimmed[i] == `_`) {
+		i++
+	}
+	if i == 0 {
+		return false // must start with an identifier character
+	}
+	// Skip whitespace between the name and '='.
+	mut j := i
+	for j < trimmed.len && (trimmed[j] == ` ` || trimmed[j] == `\t`) {
+		j++
+	}
+	return j < trimmed.len && trimmed[j] == `=`
+}
+
 fn parse_pf_conf_lines(content string) ![]PfLine {
 	lines := content.split('\n')
 	mut pf_lines := []PfLine{}
@@ -20,27 +40,22 @@ fn parse_pf_conf_lines(content string) ![]PfLine {
 			pf_line.raw_line = line
 		} else {
 			// Try to classify the line type based on content
-			if trimmed.contains(' = ') {
+			if looks_like_macro(trimmed) {
 				pf_line.line_type = 'macro'
-				
-				// Smart formatting detection for macros
-				eq_pos := line.index(' = ') or { -1 }
+
+				// Split on the first '=' (whitespace around it is optional).
+				eq_pos := line.index('=') or { -1 }
 				if eq_pos > 0 {
-					left_part := line[..eq_pos]
-					right_part := line[eq_pos + 3..]
-					
-					// Check if there's extra formatting (multiple spaces before =)
-					name_trimmed := left_part.trim_space()
-					value_trimmed := right_part.trim_space().trim('"')
-					
-					// Detect if formatting has multiple spaces (alignment)
-					has_formatting := left_part != name_trimmed || (eq_pos - name_trimmed.len > 1)
-					
+					name_trimmed := line[..eq_pos].trim_space()
+					value_trimmed := line[eq_pos + 1..].trim_space().trim('"')
+
 					pf_line.name = name_trimmed
 					pf_line.value = value_trimmed
-					
-					// Store original content if formatted, otherwise reconstruct
-					if has_formatting {
+
+					// Preserve the original line unless it is exactly the
+					// canonical 'name = "value"' the generator would emit.
+					canonical := '${name_trimmed} = "${value_trimmed}"'
+					if line.trim_space() != canonical {
 						pf_line.raw_line = line
 					}
 				}
@@ -266,7 +281,8 @@ fn parse_pf_conf_lines(content string) ![]PfLine {
 				if inline_comment != '' {
 					pf_line.comment = inline_comment
 				}
-			} else if trimmed.starts_with('pass ') || trimmed.starts_with('block ') {
+			} else if trimmed.starts_with('pass ') || trimmed.starts_with('block ')
+				|| trimmed == 'pass' || trimmed == 'block' {
 				pf_line.line_type = 'rule'
 				pf_line.raw_line = line  // Preserve original line for exact formatting
 				// Extract inline comment first
@@ -1320,6 +1336,20 @@ struct RuleModifiers {
 	prio        string
 }
 
+// Collect a user/group spec, which may begin with a comparison operator
+// (e.g. "= 1000", ">= 1000") and may be a "{ ... }" list. `start` indexes the
+// token after the user/group keyword; returns (spec, index_after).
+fn collect_userspec(parts []string, start int) (string, int) {
+	mut prefix := ''
+	mut s := start
+	if s < parts.len && parts[s] in ['=', '!=', '<', '>', '<=', '>='] {
+		prefix = parts[s] + ' '
+		s++
+	}
+	val, next := collect_grouped_value(parts, s)
+	return prefix + val, next
+}
+
 fn parse_rule_modifiers(line string) RuleModifiers {
 	rule_part, _ := extract_inline_comment(line)
 	parts := rule_part.trim_space().split(' ')
@@ -1336,10 +1366,10 @@ fn parse_rule_modifiers(line string) RuleModifiers {
 	for i < parts.len {
 		match parts[i] {
 			'user' {
-				user, i = collect_grouped_value(parts, i + 1)
+				user, i = collect_userspec(parts, i + 1)
 			}
 			'group' {
-				group, i = collect_grouped_value(parts, i + 1)
+				group, i = collect_userspec(parts, i + 1)
 			}
 			'rtable' {
 				rtable, i = collect_grouped_value(parts, i + 1)

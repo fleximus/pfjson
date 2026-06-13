@@ -381,6 +381,51 @@ fn test_scrub_rules_conversion() {
 	}
 }
 
+fn test_macro_and_bare_rule_edge_cases() {
+	// Macros without surrounding spaces, bare pass/block, and a rule whose
+	// 'user = N' must not be mistaken for a macro definition.
+	cases := {
+		'ext_if="em0"':                                       'macro'
+		'aligned   = "x"':                                    'macro'
+		'pass':                                               'rule'
+		'block':                                              'rule'
+		'pass in proto tcp from any to any user = 1000':      'rule'
+	}
+
+	mut i := 0
+	for content, want_type in cases {
+		test_file := 'test_edge_${i}.conf'
+		json_file := 'test_edge_${i}.json'
+		output_file := 'test_edge_${i}_output.conf'
+		i++
+
+		os.write_file(test_file, content) or { panic(err) }
+
+		encode_result := os.execute('./pfjson -e -f ${test_file} ${json_file}')
+		assert encode_result.exit_code == 0
+
+		json_content := os.read_file(json_file) or { panic(err) }
+		assert json_content.contains('"line_type":	"${want_type}"'), 'wrong type for "${content}"'
+		if content.contains('user = 1000') {
+			assert json_content.contains('"user":	"= 1000"')
+		}
+
+		// Everything here is valid pf and must pass the syntax check
+		check_result := os.execute('./pfjson -e -c ${test_file}')
+		assert check_result.exit_code == 0, 'Syntax check failed for "${content}"'
+
+		decode_result := os.execute('./pfjson -d -f ${json_file} ${output_file}')
+		assert decode_result.exit_code == 0
+		original_content := os.read_file(test_file) or { panic(err) }
+		output_content := os.read_file(output_file) or { panic(err) }
+		assert original_content == output_content, 'Round-trip failed for "${content}"'
+
+		os.rm(test_file) or {}
+		os.rm(json_file) or {}
+		os.rm(output_file) or {}
+	}
+}
+
 fn test_binat_and_anchor_variants() {
 	// binat rules and the nat-anchor / rdr-anchor / binat-anchor reference forms
 	cases := [
