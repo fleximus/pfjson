@@ -10,15 +10,20 @@ A CLI tool to convert OpenBSD Packet Filter configuration files (`pf.conf`) to J
 - File metadata tracking including original filename and file size
 - File overwrite protection requiring explicit force flag ("-f")
 - Stdin/stdout support using "-" as filename
-- Syntax validation and dry-run modes
-- Full parsing of all pf.conf elements:
+- Syntax checking (`-c`) and dry-run (`-n`) modes
+- Line-by-line structure that preserves source order and formatting
+- Parsing of common pf.conf elements:
   - Macros and variables
   - Tables with IP/hostname entries
   - Filter rules (pass/block)
   - NAT and RDR rules
-  - Scrub rules
-  - Options and settings
+  - Antispoof rules
+  - Options and settings (`set ...`)
   - Comments (standalone and inline)
+
+Unrecognized lines are preserved verbatim (as `unknown`) so conversion stays
+lossless, but `-c` reports them since pfjson cannot validate syntax it does not
+understand.
 
 ## Installation
 
@@ -47,22 +52,27 @@ pfjson -c -e /etc/pf.conf
 ```bash
 $ pfjson -h
 pfjson v0.9.0
+Author: Felix Ehlers
+License: MIT License
 -----------------------------------------------
 Usage: pfjson [options] [ARGS]
 
-Description: CLI tool to convert pf.conf to JSON and vice versa
+Description: A CLI tool to convert OpenBSD Packet Filter configuration files (`pf.conf`) to JSON and vice versa.
 
 Options:
-  -e, --encode              Encode pf.conf to JSON
-  -d, --decode              Decode JSON to pf.conf
-  -c, --check               Syntax check only
-  -n, --dry-run             Dry run mode
-  -v, --verify              Strict checksum verification (fail on mismatch)
-  -f, --force               Force overwrite existing output files
-  -j, --json                Machine-parsable JSON output
+  -e, --encode              Encode pf.conf to JSON (default false)
+  -d, --decode              Decode JSON to pf.conf (default false)
+  -c, --check               Syntax check only (default false)
+  -n, --dry-run             Dry run mode (default false)
+  -v, --verify              Strict checksum verification (fail on mismatch) (default false)
+  -f, --force               Force overwrite existing output files (default false)
+  -j, --json                Machine-parsable JSON output (default false)
   -h, --help                display this help and exit
   --version                 output version information and exit
 ```
+
+Running `pfjson` with no arguments prints the version banner followed by this
+usage. Version, author, and license are also shown by `pfjson --version`.
 
 ### Encoding (pf.conf → JSON)
 
@@ -110,24 +120,37 @@ pass out all
 pass in on $ext_if proto tcp from any to $web_server port 80
 ```
 
-Generated JSON output:
+Generated JSON output (abbreviated):
 ```json
 {
   "metadata": {
     "filename": "pf.conf",
-    "sha256": "a1b2c3d4e5f6...",
-    "filesize": 285
+    "timestamp": "2026-06-13 20:49:38",
+    "filesize": 285,
+    "checksums": {
+      "sha256": "2b407e08...",
+      "sha512": "09a240ae..."
+    }
   },
-  "config": {
-    "macros": [{"name": "ext_if", "value": "em0"}],
-    "tables": [{"name": "blocklist", "entries": ["10.0.0.1", "10.0.0.2"]}],
-    "rules": [...],
-    "nat_rules": [...]
-  }
+  "lines": [
+    { "line_num": 1, "line_type": "comment", "raw_line": "# External interface" },
+    { "line_num": 2, "line_type": "macro", "name": "ext_if", "value": "em0" },
+    { "line_num": 3, "line_type": "table", "name": "blocklist",
+      "values": ["10.0.0.1", "10.0.0.2"],
+      "raw_line": "table <blocklist> { 10.0.0.1, 10.0.0.2 }" },
+    { "line_num": 4, "line_type": "option", "option_name": "skip", "option_value": "on lo0",
+      "raw_line": "set skip on lo0" },
+    { "line_num": 5, "line_type": "rule", "action": "block", "direction": "in",
+      "raw_line": "block in all" }
+  ]
 }
 ```
 
-The JSON contains structured representations of all pf.conf elements with metadata for integrity verification.
+The output is a flat, ordered list of lines. Each entry carries a `line_type`
+and only the fields relevant to it (empty fields are omitted), plus a `raw_line`
+when the original formatting needs to be preserved exactly. The `metadata`
+block records the original filename, a timestamp, the file size, and SHA256/SHA512
+checksums used to verify a faithful round-trip on decode.
 
 ### Decoding (JSON → pf.conf)
 
@@ -160,7 +183,7 @@ By default, pfjson will not overwrite existing files:
 
 ```bash
 $ pfjson -e pf.conf existing.json
-Error encoding: Output file "existing.json" already exists. Use -f to force overwrite.
+Error encoding: Output file already exists: existing.json. Use -f to force overwrite.
 
 $ pfjson -e -f pf.conf existing.json
 Encoded to: existing.json
@@ -172,33 +195,42 @@ The tool automatically verifies data integrity during conversion:
 
 ```bash
 $ pfjson -d config.json
-Checksum verification passed - output matches original (from pf.conf)
+✓ Checksum verification passed - output matches original (from pf.conf)
 
 $ pfjson -d -v tampered.json
 Error decoding: Checksum verification failed - output does not match original metadata (from pf.conf)
 ```
+
+Without `-v`, a mismatch is reported as a warning and conversion still proceeds;
+with `-v` it is a hard error and pfjson exits non-zero.
 
 ### Error Handling
 
 Common error scenarios and their solutions:
 
 ```bash
-# Invalid syntax in pf.conf
-$ pfjson -c -e broken.conf
-Error: Syntax error at line 5: unexpected token 'invalid'
+# Unrecognized / invalid lines in pf.conf (-c reports each with its line number)
+$ pfjson -e -c broken.conf
+Syntax check: FAILED (1 error(s))
+  line 5: unrecognized or unsupported syntax: this is not valid pf
 
-# File doesn't exist
-$ pfjson -e missing.conf
-Error: Input file does not exist: missing.conf
+# File doesn't exist (input given explicitly)
+$ pfjson -e missing.conf out.json
+Error encoding: Input file does not exist: missing.conf
 
 # Attempting to overwrite existing file
 $ pfjson -e pf.conf existing.json
-Error: Output file "existing.json" already exists. Use -f to force overwrite.
+Error encoding: Output file already exists: existing.json. Use -f to force overwrite.
 
-# Corrupted JSON during restore
+# Round-trip mismatch during restore (strict mode)
 $ pfjson -d -v corrupted.json
-Error: Checksum verification failed - data integrity compromised
+Error decoding: Checksum verification failed - output does not match original metadata
 ```
+
+> **Note:** `-c` validates the subset of pf.conf that pfjson recognizes. Lines it
+> cannot classify (e.g. `scrub`, `anchor`, `match`, `queue`) are reported as
+> "unrecognized or unsupported syntax" — the checker cannot distinguish unsupported
+> from invalid. For full grammar validation, use `pfctl -nf`.
 
 ### Machine-Parsable JSON Output
 
@@ -207,19 +239,23 @@ The `-j` flag provides structured JSON responses for automation and scripting:
 ```bash
 # Successful operation
 $ pfjson -e -j pf.conf backup.json
-{"success":true,"message":"File encoded successfully","data":{"output_file":"backup.json","input_file":"pf.conf"}}
+{"success":true,"message":"File encoded successfully","data":{"output_file":"backup.json","input_file":"pf.conf"},"error":""}
 
-# Syntax check
-$ pfjson -c -e -j pf.conf
-{"success":true,"message":"Syntax check passed"}
+# Syntax check (passing)
+$ pfjson -e -c -j pf.conf
+{"success":true,"message":"Syntax check passed","data":{},"error":""}
+
+# Syntax check (failing) - exits non-zero, details in the "error" field
+$ pfjson -e -c -j broken.conf
+{"success":false,"message":"Syntax check failed: 1 error(s)","data":{},"error":"line 5: unrecognized or unsupported syntax"}
 
 # Checksum verification with details
 $ pfjson -d -j backup.json
-{"success":true,"message":"Checksum verification passed (from pf.conf)","data":{"sha256":"abc123...","sha512":"def456...","size":"2048"}}
+{"success":true,"message":"Checksum verification passed (from pf.conf)","data":{"sha256":"abc123...","sha512":"def456...","size":"2048"},"error":""}
 
 # Error handling
-$ pfjson -e -j nonexistent.conf
-{"success":false,"message":"Encoding failed","error":"Input file does not exist: nonexistent.conf"}
+$ pfjson -e -j missing.conf out.json
+{"success":false,"message":"Encoding failed","data":{},"error":"Input file does not exist: missing.conf"}
 
 # Integration with jq for processing
 $ pfjson -e -j pf.conf backup.json | jq -r '.data.output_file'
