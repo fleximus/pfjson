@@ -34,6 +34,13 @@ mut:
 	dup_to       string @[omitempty] // dup-to destination
 	route_to     string @[omitempty] // route-to target (policy-based routing)
 	reply_to     string @[omitempty] // reply-to target (policy-based routing)
+	user         string @[omitempty] // user id/name match
+	group        string @[omitempty] // group id/name match
+	rtable       string @[omitempty] // rtable id
+	probability  string @[omitempty] // probability like "20%"
+	received_on  string @[omitempty] // received-on interface
+	divert_to    string @[omitempty] // divert-to target (with optional port)
+	prio         string @[omitempty] // "set prio" value
 	flags        string @[omitempty] // TCP flags spec like "S/SA" or "any"
 	icmp_type    string @[omitempty] // ICMP type for icmp rules
 	icmp6_type   string @[omitempty] // ICMP6 type for icmp6 rules

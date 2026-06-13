@@ -265,6 +265,34 @@ fn generate_pf_conf_from_lines(lines []PfLine) !string {
 					if line.reply_to != '' {
 						rule_parts << 'reply-to ${line.reply_to}'
 					}
+
+					if line.user != '' {
+						rule_parts << 'user ${line.user}'
+					}
+
+					if line.group != '' {
+						rule_parts << 'group ${line.group}'
+					}
+
+					if line.received_on != '' {
+						rule_parts << 'received-on ${line.received_on}'
+					}
+
+					if line.divert_to != '' {
+						rule_parts << 'divert-to ${line.divert_to}'
+					}
+
+					if line.probability != '' {
+						rule_parts << 'probability ${line.probability}'
+					}
+
+					if line.rtable != '' {
+						rule_parts << 'rtable ${line.rtable}'
+					}
+
+					if line.prio != '' {
+						rule_parts << 'set prio ${line.prio}'
+					}
 					
 					mut rule_line := rule_parts.join(' ')
 					

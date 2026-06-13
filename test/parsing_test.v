@@ -381,6 +381,74 @@ fn test_scrub_rules_conversion() {
 	}
 }
 
+fn test_rule_modifiers_conversion() {
+	// Test user/group/rtable/probability/received-on/divert-to/set-prio modifiers
+	modifier_tests := [
+		// user list + keep state
+		'pass in proto tcp from any to any port 22 user { www, root } keep state',
+		// group + rtable
+		'pass out on \$ext_if from any to any group wheel rtable 1',
+		// probability + divert-to with port
+		'pass in proto tcp to port 80 probability 20% divert-to 127.0.0.1 port 8080',
+		// received-on + set prio
+		'pass in on \$ext_if received-on \$vpn_if from any to any set prio 3',
+		// set prio with a (lo, hi) pair
+		'pass out from any to any set prio (3, 7)',
+	]
+
+	for i, test_content in modifier_tests {
+		test_file := 'test_mod_${i}.conf'
+		json_file := 'test_mod_${i}.json'
+		output_file := 'test_mod_${i}_output.conf'
+
+		os.write_file(test_file, test_content) or { panic(err) }
+
+		// Encode to JSON
+		encode_result := os.execute('./pfjson -e -f ${test_file} ${json_file}')
+		assert encode_result.exit_code == 0
+		assert os.exists(json_file)
+
+		json_content := os.read_file(json_file) or { panic(err) }
+		if test_content.contains('user {') {
+			assert json_content.contains('"user":	"{ www, root }"')
+		}
+		if test_content.contains('group wheel') {
+			assert json_content.contains('"group":	"wheel"')
+			assert json_content.contains('"rtable":	"1"')
+		}
+		if test_content.contains('probability') {
+			assert json_content.contains('"probability":	"20%"')
+			assert json_content.contains('"divert_to":	"127.0.0.1 port 8080"')
+		}
+		if test_content.contains('received-on') {
+			assert json_content.contains('"received_on":	"\$vpn_if"')
+			assert json_content.contains('"prio":	"3"')
+		}
+		if test_content.contains('(3, 7)') {
+			assert json_content.contains('"prio":	"(3, 7)"')
+		}
+
+		// Must pass the syntax check
+		check_result := os.execute('./pfjson -e -c ${test_file}')
+		assert check_result.exit_code == 0, 'Syntax check failed for modifier test ${i}'
+
+		// Test json -> conf conversion
+		decode_result := os.execute('./pfjson -d -f ${json_file} ${output_file}')
+		assert decode_result.exit_code == 0
+		assert os.exists(output_file)
+
+		// Verify round-trip fidelity
+		original_content := os.read_file(test_file) or { panic(err) }
+		output_content := os.read_file(output_file) or { panic(err) }
+		assert original_content == output_content, 'Round-trip conversion failed for modifier test ${i}'
+
+		// Clean up
+		os.rm(test_file) or {}
+		os.rm(json_file) or {}
+		os.rm(output_file) or {}
+	}
+}
+
 fn test_policy_routing_conversion() {
 	// Test route-to / reply-to / dup-to policy-routing modifiers on rules
 	routing_tests := [

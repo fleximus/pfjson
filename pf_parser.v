@@ -206,6 +206,14 @@ fn parse_pf_conf_lines(content string) ![]PfLine {
 				route_to, reply_to := parse_rule_routing(line)
 				pf_line.route_to = route_to
 				pf_line.reply_to = reply_to
+				mods := parse_rule_modifiers(line)
+				pf_line.user = mods.user
+				pf_line.group = mods.group
+				pf_line.rtable = mods.rtable
+				pf_line.probability = mods.probability
+				pf_line.received_on = mods.received_on
+				pf_line.divert_to = mods.divert_to
+				pf_line.prio = mods.prio
 
 				// Capture the match-specific redirection action, if any.
 				redirect_kw, redirect_target := parse_match_redirection(line)
@@ -269,6 +277,14 @@ fn parse_pf_conf_lines(content string) ![]PfLine {
 				route_to, reply_to := parse_rule_routing(line)
 				pf_line.route_to = route_to
 				pf_line.reply_to = reply_to
+				mods := parse_rule_modifiers(line)
+				pf_line.user = mods.user
+				pf_line.group = mods.group
+				pf_line.rtable = mods.rtable
+				pf_line.probability = mods.probability
+				pf_line.received_on = mods.received_on
+				pf_line.divert_to = mods.divert_to
+				pf_line.prio = mods.prio
 			} else {
 				pf_line.line_type = 'unknown'
 				pf_line.raw_line = line  // Preserve original line for exact formatting
@@ -1186,6 +1202,36 @@ fn parse_anchor_line(line string) (string, string, bool) {
 // Extract route-to / reply-to targets from a filter rule line.
 // A target may be a single host, an "(interface address)" pair, or a
 // "{ ... }" round-robin pool. Returns (route_to, reply_to).
+// Collect a value token that may be a "{ ... }" or "( ... )" group spanning
+// several space-separated tokens. `start` indexes the first value token;
+// returns (value, index_after_value).
+fn collect_grouped_value(parts []string, start int) (string, int) {
+	if start >= parts.len {
+		return '', start
+	}
+	open := parts[start]
+	mut close_ch := ''
+	if open.starts_with('{') && !open.ends_with('}') {
+		close_ch = '}'
+	} else if open.starts_with('(') && !open.ends_with(')') {
+		close_ch = ')'
+	}
+	if close_ch == '' {
+		return open, start + 1
+	}
+	mut tparts := []string{}
+	mut i := start
+	for i < parts.len && !parts[i].ends_with(close_ch) {
+		tparts << parts[i]
+		i++
+	}
+	if i < parts.len {
+		tparts << parts[i]
+		i++
+	}
+	return tparts.join(' '), i
+}
+
 fn parse_rule_routing(line string) (string, string) {
 	rule_part, _ := extract_inline_comment(line)
 	parts := rule_part.trim_space().split(' ')
@@ -1197,34 +1243,13 @@ fn parse_rule_routing(line string) (string, string) {
 	for i < parts.len {
 		part := parts[i]
 		if part == 'route-to' || part == 'reply-to' {
-			mut target := ''
-			if i + 1 < parts.len {
-				i++
-				open := parts[i]
-				is_paren := open.starts_with('(') && !open.ends_with(')')
-				is_brace := open.starts_with('{') && !open.ends_with('}')
-				if is_paren || is_brace {
-					close_ch := if is_paren { ')' } else { '}' }
-					mut tparts := []string{}
-					for i < parts.len && !parts[i].ends_with(close_ch) {
-						tparts << parts[i]
-						i++
-					}
-					if i < parts.len {
-						tparts << parts[i]
-						i++
-					}
-					target = tparts.join(' ')
-				} else {
-					target = open
-					i++
-				}
-			}
+			val, next := collect_grouped_value(parts, i + 1)
 			if part == 'route-to' {
-				route_to = target
+				route_to = val
 			} else {
-				reply_to = target
+				reply_to = val
 			}
+			i = next
 		} else {
 			i++
 		}
@@ -1248,31 +1273,93 @@ fn parse_match_redirection(line string) (string, string) {
 		part := parts[i]
 		if part in ['nat-to', 'rdr-to', 'binat-to', 'af-to'] {
 			redirect_kw = part
-			if i + 1 < parts.len {
-				i++
-				// Collect a parenthesized target like "(egress:0)" or a single token
-				if parts[i].starts_with('(') && !parts[i].ends_with(')') {
-					mut tparts := []string{}
-					for i < parts.len && !parts[i].ends_with(')') {
-						tparts << parts[i]
-						i++
-					}
-					if i < parts.len {
-						tparts << parts[i]
-						i++
-					}
-					target = tparts.join(' ')
-				} else {
-					target = parts[i]
-					i++
-				}
-			}
+			val, next := collect_grouped_value(parts, i + 1)
+			target = val
+			i = next
 		} else {
 			i++
 		}
 	}
 
 	return redirect_kw, target
+}
+
+// Extract assorted single-value rule modifiers (user/group/rtable/probability/
+// received-on/divert-to and "set prio") from a filter or match rule line.
+struct RuleModifiers {
+	user        string
+	group       string
+	rtable      string
+	probability string
+	received_on string
+	divert_to   string
+	prio        string
+}
+
+fn parse_rule_modifiers(line string) RuleModifiers {
+	rule_part, _ := extract_inline_comment(line)
+	parts := rule_part.trim_space().split(' ')
+
+	mut user := ''
+	mut group := ''
+	mut rtable := ''
+	mut probability := ''
+	mut received_on := ''
+	mut divert_to := ''
+	mut prio := ''
+
+	mut i := 0
+	for i < parts.len {
+		match parts[i] {
+			'user' {
+				user, i = collect_grouped_value(parts, i + 1)
+			}
+			'group' {
+				group, i = collect_grouped_value(parts, i + 1)
+			}
+			'rtable' {
+				rtable, i = collect_grouped_value(parts, i + 1)
+			}
+			'probability' {
+				probability, i = collect_grouped_value(parts, i + 1)
+			}
+			'received-on' {
+				received_on, i = collect_grouped_value(parts, i + 1)
+			}
+			'divert-to' {
+				val, next := collect_grouped_value(parts, i + 1)
+				mut dv := val
+				mut j := next
+				// divert-to may carry a "port <n>" clause
+				if j + 1 < parts.len && parts[j] == 'port' {
+					dv += ' port ${parts[j + 1]}'
+					j += 2
+				}
+				divert_to = dv
+				i = j
+			}
+			'set' {
+				if i + 1 < parts.len && parts[i + 1] == 'prio' {
+					prio, i = collect_grouped_value(parts, i + 2)
+				} else {
+					i++
+				}
+			}
+			else {
+				i++
+			}
+		}
+	}
+
+	return RuleModifiers{
+		user: user
+		group: group
+		rtable: rtable
+		probability: probability
+		received_on: received_on
+		divert_to: divert_to
+		prio: prio
+	}
 }
 
 // Parse an include line (e.g., 'include "/etc/pf.macros"' -> "/etc/pf.macros")
