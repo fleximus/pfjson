@@ -56,7 +56,7 @@ struct ConfigElement {
 fn main() {
 	mut fp := flag.new_flag_parser(os.args)
 	fp.application(app_name)
-	fp.version("v${app_version}")
+	fp.version("v${app_version}\nAuthor: ${app_author}\nLicense: ${app_license}")
 	fp.description('A CLI tool to convert OpenBSD Packet Filter configuration files (`pf.conf`) to JSON and vice versa.')
 
 	encode := fp.bool('encode', `e`, false, 'Encode pf.conf to JSON')
@@ -70,6 +70,12 @@ fn main() {
 	additional_args := fp.finalize() or {
 		eprintln(err)
 		exit(1)
+	}
+
+	// No arguments at all - show version banner and usage
+	if os.args.len == 1 {
+		println(fp.usage())
+		exit(0)
 	}
 
 	if !encode && !decode {
