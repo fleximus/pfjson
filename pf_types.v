@@ -31,6 +31,7 @@ mut:
 	tag          string @[omitempty] // tag
 	tagged       string @[omitempty] // tagged
 	dup_to       string @[omitempty] // dup-to destination
+	flags        string @[omitempty] // TCP flags spec like "S/SA" or "any"
 	icmp_type    string @[omitempty] // ICMP type for icmp rules
 	icmp6_type   string @[omitempty] // ICMP6 type for icmp6 rules
 

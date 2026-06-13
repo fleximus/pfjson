@@ -381,6 +381,64 @@ fn test_scrub_rules_conversion() {
 	}
 }
 
+fn test_include_load_flags_conversion() {
+	// Test include, load anchor, and TCP flags parsing
+	cases := [
+		// include directive
+		'include "/etc/pf.macros.conf"',
+		// load anchor directive
+		'load anchor "ftp-proxy" from "/etc/ftp-proxy.conf"',
+		// rule with TCP flags
+		'pass in on \$ext_if proto tcp from any to any port 22 flags S/SA keep state',
+	]
+
+	for i, test_content in cases {
+		test_file := 'test_qw_${i}.conf'
+		json_file := 'test_qw_${i}.json'
+		output_file := 'test_qw_${i}_output.conf'
+
+		os.write_file(test_file, test_content) or { panic(err) }
+
+		// Encode to JSON
+		encode_result := os.execute('./pfjson -e -f ${test_file} ${json_file}')
+		assert encode_result.exit_code == 0
+		assert os.exists(json_file)
+
+		json_content := os.read_file(json_file) or { panic(err) }
+		if test_content.starts_with('include') {
+			assert json_content.contains('"line_type":	"include"')
+			assert json_content.contains('"value":	"/etc/pf.macros.conf"')
+		}
+		if test_content.starts_with('load anchor') {
+			assert json_content.contains('"line_type":	"load"')
+			assert json_content.contains('"name":	"ftp-proxy"')
+			assert json_content.contains('"value":	"/etc/ftp-proxy.conf"')
+		}
+		if test_content.contains('flags') {
+			assert json_content.contains('"flags":	"S/SA"')
+		}
+
+		// All of these must pass the syntax check
+		check_result := os.execute('./pfjson -e -c ${test_file}')
+		assert check_result.exit_code == 0, 'Syntax check failed for case ${i}'
+
+		// Test json -> conf conversion
+		decode_result := os.execute('./pfjson -d -f ${json_file} ${output_file}')
+		assert decode_result.exit_code == 0
+		assert os.exists(output_file)
+
+		// Verify round-trip fidelity
+		original_content := os.read_file(test_file) or { panic(err) }
+		output_content := os.read_file(output_file) or { panic(err) }
+		assert original_content == output_content, 'Round-trip conversion failed for case ${i}'
+
+		// Clean up
+		os.rm(test_file) or {}
+		os.rm(json_file) or {}
+		os.rm(output_file) or {}
+	}
+}
+
 fn test_comments_conversion() {
 	// Test various comment configurations
 	comment_tests := [

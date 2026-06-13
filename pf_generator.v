@@ -76,6 +76,24 @@ fn generate_pf_conf_from_lines(lines []PfLine) !string {
 					output << scrub_line
 				}
 			}
+			'include' {
+				if line.raw_line != '' {
+					output << line.raw_line
+				} else {
+					output << 'include "${line.value}"'
+				}
+			}
+			'load' {
+				if line.raw_line != '' {
+					output << line.raw_line
+				} else {
+					mut load_line := 'load anchor "${line.name}"'
+					if line.value != '' {
+						load_line += ' from "${line.value}"'
+					}
+					output << load_line
+				}
+			}
 			'nat', 'rdr', 'rule' {
 				if line.raw_line != '' {
 					output << line.raw_line
@@ -148,7 +166,11 @@ fn generate_pf_conf_from_lines(lines []PfLine) !string {
 					if line.icmp6_type != '' {
 						rule_parts << 'icmp6-type ${line.icmp6_type}'
 					}
-					
+
+					if line.flags != '' {
+						rule_parts << 'flags ${line.flags}'
+					}
+
 					if line.target != '' {
 						rule_parts << '-> ${line.target}'
 					}

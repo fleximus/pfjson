@@ -143,6 +143,24 @@ fn parse_pf_conf_lines(content string) ![]PfLine {
 				if inline_comment != '' {
 					pf_line.comment = inline_comment
 				}
+			} else if trimmed.starts_with('include ') {
+				pf_line.line_type = 'include'
+				pf_line.value = parse_include_line(line)
+				pf_line.raw_line = line  // Preserve original line for exact formatting
+				_, inline_comment := extract_inline_comment(line)
+				if inline_comment != '' {
+					pf_line.comment = inline_comment
+				}
+			} else if trimmed.starts_with('load anchor ') {
+				pf_line.line_type = 'load'
+				load_name, load_path := parse_load_anchor_line(line)
+				pf_line.name = load_name
+				pf_line.value = load_path
+				pf_line.raw_line = line  // Preserve original line for exact formatting
+				_, inline_comment := extract_inline_comment(line)
+				if inline_comment != '' {
+					pf_line.comment = inline_comment
+				}
 			} else if trimmed.starts_with('pass ') || trimmed.starts_with('block ') {
 				pf_line.line_type = 'rule'
 				pf_line.raw_line = line  // Preserve original line for exact formatting
@@ -153,7 +171,7 @@ fn parse_pf_conf_lines(content string) ![]PfLine {
 				}
 
 				// Parse rule components
-				action, direction, quick, iface, inet_family, protocol, source, destination, port, options, label, tag, tagged, dup_to, icmp_type, icmp6_type := parse_rule_line(line)
+				action, direction, quick, iface, inet_family, protocol, source, destination, port, options, label, tag, tagged, dup_to, flags, icmp_type, icmp6_type := parse_rule_line(line)
 				pf_line.action = action
 				pf_line.direction = direction
 				pf_line.quick = quick
@@ -168,6 +186,7 @@ fn parse_pf_conf_lines(content string) ![]PfLine {
 				pf_line.tag = tag
 				pf_line.tagged = tagged
 				pf_line.dup_to = dup_to
+				pf_line.flags = flags
 				pf_line.icmp_type = icmp_type
 				pf_line.icmp6_type = icmp6_type
 			} else {
@@ -214,14 +233,14 @@ fn extract_inline_comment(line string) (string, string) {
 	return line, ''
 }
 
-fn parse_rule_line(line string) (string, string, bool, string, string, string, string, string, string, []string, string, string, string, string, string, string) {
+fn parse_rule_line(line string) (string, string, bool, string, string, string, string, string, string, []string, string, string, string, string, string, string, string) {
 	// Remove inline comment first
 	rule_part, _ := extract_inline_comment(line)
 	
 	// Split into tokens (simple space-based for now)
 	parts := rule_part.trim_space().split(' ')
 	if parts.len == 0 {
-		return '', '', false, '', '', '', '', '', '', []string{}, '', '', '', '', '', ''
+		return '', '', false, '', '', '', '', '', '', []string{}, '', '', '', '', '', '', ''
 	}
 	
 	mut action := ''
@@ -238,9 +257,10 @@ fn parse_rule_line(line string) (string, string, bool, string, string, string, s
 	mut tag := ''
 	mut tagged := ''
 	mut dup_to := ''
+	mut flags := ''
 	mut icmp_type := ''
 	mut icmp6_type := ''
-	
+
 	mut i := 0
 	
 	// Parse action (pass/block)
@@ -383,6 +403,15 @@ fn parse_rule_line(line string) (string, string, bool, string, string, string, s
 				options << 'log'
 				i++
 			}
+			'flags' {
+				if i + 1 < parts.len {
+					i++
+					flags = parts[i]
+					i++
+				} else {
+					i++
+				}
+			}
 			'label' {
 				if i + 1 < parts.len {
 					i++
@@ -484,7 +513,7 @@ fn parse_rule_line(line string) (string, string, bool, string, string, string, s
 		}
 	}
 	
-	return action, direction, quick, iface, inet_family, protocol, source, destination, port, options, label, tag, tagged, dup_to, icmp_type, icmp6_type
+	return action, direction, quick, iface, inet_family, protocol, source, destination, port, options, label, tag, tagged, dup_to, flags, icmp_type, icmp6_type
 }
 
 // Parse NAT rule line into components (e.g., "nat pass log on eth0 from { 192.168.1.0/24 } to { any } -> (eth0)")
@@ -932,6 +961,36 @@ fn parse_scrub_line(line string) (string, string, []string) {
 	}
 
 	return direction, iface, options
+}
+
+// Parse an include line (e.g., 'include "/etc/pf.macros"' -> "/etc/pf.macros")
+fn parse_include_line(line string) string {
+	rule_part, _ := extract_inline_comment(line)
+	trimmed := rule_part.trim_space()
+	if !trimmed.starts_with('include') {
+		return ''
+	}
+	return trimmed[7..].trim_space().trim('"\'')
+}
+
+// Parse a load anchor line
+// (e.g., 'load anchor "ftp" from "/etc/ftp.conf"' -> ("ftp", "/etc/ftp.conf"))
+fn parse_load_anchor_line(line string) (string, string) {
+	rule_part, _ := extract_inline_comment(line)
+	trimmed := rule_part.trim_space()
+	mut name := ''
+	mut path := ''
+	if !trimmed.starts_with('load anchor') {
+		return name, path
+	}
+	rest := trimmed[11..].trim_space() // after 'load anchor'
+	if from_idx := rest.index(' from ') {
+		name = rest[..from_idx].trim_space().trim('"\'')
+		path = rest[from_idx + 6..].trim_space().trim('"\'')
+	} else {
+		name = rest.trim('"\'')
+	}
+	return name, path
 }
 
 // Parse option/set line into components (e.g., "set skip on lo" -> ("skip", "on lo"))
