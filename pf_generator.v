@@ -59,6 +59,23 @@ fn generate_pf_conf_from_lines(lines []PfLine) !string {
 					output << antispoof_line
 				}
 			}
+			'scrub' {
+				if line.raw_line != '' {
+					output << line.raw_line
+				} else {
+					mut scrub_line := 'scrub'
+					if line.direction != '' {
+						scrub_line += ' ${line.direction}'
+					}
+					if line.interfaces.len > 0 {
+						scrub_line += ' on ${line.interfaces[0]}'
+					}
+					if line.options.len > 0 {
+						scrub_line += ' ${line.options.join(' ')}'
+					}
+					output << scrub_line
+				}
+			}
 			'nat', 'rdr', 'rule' {
 				if line.raw_line != '' {
 					output << line.raw_line

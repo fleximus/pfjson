@@ -128,6 +128,21 @@ fn parse_pf_conf_lines(content string) ![]PfLine {
 				if inline_comment != '' {
 					pf_line.comment = inline_comment
 				}
+			} else if trimmed.starts_with('scrub ') {
+				pf_line.line_type = 'scrub'
+				// Parse scrub components
+				scrub_direction, scrub_interface, scrub_options := parse_scrub_line(line)
+				pf_line.direction = scrub_direction
+				if scrub_interface != '' {
+					pf_line.interfaces = [scrub_interface]
+				}
+				pf_line.options = scrub_options
+				pf_line.raw_line = line  // Preserve original line for exact formatting
+				// Extract inline comment if present
+				_, inline_comment := extract_inline_comment(line)
+				if inline_comment != '' {
+					pf_line.comment = inline_comment
+				}
 			} else if trimmed.starts_with('pass ') || trimmed.starts_with('block ') {
 				pf_line.line_type = 'rule'
 				pf_line.raw_line = line  // Preserve original line for exact formatting
@@ -871,6 +886,52 @@ fn parse_antispoof_line(line string) ([]string, string, bool) {
 	}
 	
 	return options, iface, has_log
+}
+
+// Parse scrub line into components
+// (e.g., "scrub in on $ext_if all random-id" -> ("in", "$ext_if", ["all", "random-id"]))
+fn parse_scrub_line(line string) (string, string, []string) {
+	// Remove inline comment first
+	rule_part, _ := extract_inline_comment(line)
+	trimmed := rule_part.trim_space()
+
+	mut direction := ''
+	mut iface := ''
+	mut options := []string{}
+
+	if !trimmed.starts_with('scrub') {
+		return direction, iface, options
+	}
+
+	parts := trimmed.split(' ')
+	mut i := 1 // skip 'scrub'
+	for i < parts.len {
+		part := parts[i]
+		match part {
+			'' {
+				i++
+			}
+			'in', 'out' {
+				direction = part
+				i++
+			}
+			'on' {
+				if i + 1 < parts.len {
+					i++
+					iface = parts[i]
+					i++
+				} else {
+					i++
+				}
+			}
+			else {
+				options << part
+				i++
+			}
+		}
+	}
+
+	return direction, iface, options
 }
 
 // Parse option/set line into components (e.g., "set skip on lo" -> ("skip", "on lo"))

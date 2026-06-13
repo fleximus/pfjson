@@ -324,6 +324,63 @@ fn test_regular_rules_conversion() {
 	}
 }
 
+fn test_scrub_rules_conversion() {
+	// Test various scrub rule configurations
+	scrub_tests := [
+		// Basic scrub
+		'scrub in all',
+		// Scrub on an interface
+		'scrub on \$ext_if all',
+		// Scrub with direction, interface and option
+		'scrub in on \$ext_if all random-id',
+		// Scrub with multi-token options
+		'scrub out all max-mss 1440 no-df',
+	]
+
+	for i, test_content in scrub_tests {
+		test_file := 'test_scrub_${i}.conf'
+		json_file := 'test_scrub_${i}.json'
+		output_file := 'test_scrub_${i}_output.conf'
+
+		os.write_file(test_file, test_content) or { panic(err) }
+
+		// Encode to JSON
+		encode_result := os.execute('./pfjson -e -f ${test_file} ${json_file}')
+		assert encode_result.exit_code == 0
+		assert os.exists(json_file)
+
+		// Verify JSON contains expected scrub data
+		json_content := os.read_file(json_file) or { panic(err) }
+		assert json_content.contains('"line_type":	"scrub"')
+		if test_content.contains('scrub in') {
+			assert json_content.contains('"direction":	"in"')
+		}
+		if test_content.contains('on \$ext_if') {
+			assert json_content.contains('"interfaces":	["\$ext_if"]')
+		}
+		assert json_content.contains('"options"')
+
+		// A valid scrub line must pass the syntax check
+		check_result := os.execute('./pfjson -e -c ${test_file}')
+		assert check_result.exit_code == 0, 'Syntax check failed for scrub test ${i}'
+
+		// Test json -> conf conversion
+		decode_result := os.execute('./pfjson -d -f ${json_file} ${output_file}')
+		assert decode_result.exit_code == 0
+		assert os.exists(output_file)
+
+		// Verify round-trip fidelity
+		original_content := os.read_file(test_file) or { panic(err) }
+		output_content := os.read_file(output_file) or { panic(err) }
+		assert original_content == output_content, 'Round-trip conversion failed for scrub test ${i}'
+
+		// Clean up
+		os.rm(test_file) or {}
+		os.rm(json_file) or {}
+		os.rm(output_file) or {}
+	}
+}
+
 fn test_comments_conversion() {
 	// Test various comment configurations
 	comment_tests := [

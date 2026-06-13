@@ -17,6 +17,7 @@ A CLI tool to convert OpenBSD Packet Filter configuration files (`pf.conf`) to J
   - Tables with IP/hostname entries
   - Filter rules (pass/block)
   - NAT and RDR rules
+  - Scrub rules
   - Antispoof rules
   - Options and settings (`set ...`)
   - Comments (standalone and inline)
@@ -228,9 +229,9 @@ Error decoding: Checksum verification failed - output does not match original me
 ```
 
 > **Note:** `-c` validates the subset of pf.conf that pfjson recognizes. Lines it
-> cannot classify (e.g. `scrub`, `anchor`, `match`, `queue`) are reported as
-> "unrecognized or unsupported syntax" — the checker cannot distinguish unsupported
-> from invalid. For full grammar validation, use `pfctl -nf`.
+> cannot classify (e.g. `anchor`, `match`, `queue`/`altq`, `load anchor`, `include`)
+> are reported as "unrecognized or unsupported syntax" — the checker cannot
+> distinguish unsupported from invalid. For full grammar validation, use `pfctl -nf`.
 
 ### Machine-Parsable JSON Output
 
