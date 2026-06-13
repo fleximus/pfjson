@@ -161,6 +161,39 @@ fn parse_pf_conf_lines(content string) ![]PfLine {
 				if inline_comment != '' {
 					pf_line.comment = inline_comment
 				}
+			} else if trimmed.starts_with('match ') {
+				pf_line.line_type = 'match'
+				pf_line.raw_line = line  // Preserve original line for exact formatting
+				_, inline_comment := extract_inline_comment(line)
+				if inline_comment != '' {
+					pf_line.comment = inline_comment
+				}
+
+				// Reuse the filter-rule parser for the shared components
+				// (action is 'match'; direction/interface/proto/from/to/port/flags).
+				action, direction, quick, iface, inet_family, protocol, source, destination, port, options, label, tag, tagged, dup_to, flags, icmp_type, icmp6_type := parse_rule_line(line)
+				pf_line.action = action
+				pf_line.direction = direction
+				pf_line.quick = quick
+				pf_line.inet_families = parse_inet_family_array(inet_family)
+				pf_line.interfaces = parse_interface_array(iface)
+				pf_line.protocols = parse_protocol_array(protocol)
+				pf_line.sources = parse_source_array(source)
+				pf_line.destinations = parse_destination_array(destination)
+				pf_line.ports = parse_port_array(port)
+				pf_line.options = options
+				pf_line.label = label
+				pf_line.tag = tag
+				pf_line.tagged = tagged
+				pf_line.dup_to = dup_to
+				pf_line.flags = flags
+				pf_line.icmp_type = icmp_type
+				pf_line.icmp6_type = icmp6_type
+
+				// Capture the match-specific redirection action, if any.
+				redirect_kw, redirect_target := parse_match_redirection(line)
+				pf_line.rule_type = redirect_kw
+				pf_line.target = redirect_target
 			} else if trimmed.starts_with('pass ') || trimmed.starts_with('block ') {
 				pf_line.line_type = 'rule'
 				pf_line.raw_line = line  // Preserve original line for exact formatting
@@ -961,6 +994,48 @@ fn parse_scrub_line(line string) (string, string, []string) {
 	}
 
 	return direction, iface, options
+}
+
+// Parse the redirection action of a match rule (nat-to / rdr-to / binat-to / af-to).
+// Returns the keyword and its target, e.g.
+// "match ... nat-to (egress)" -> ("nat-to", "(egress)").
+fn parse_match_redirection(line string) (string, string) {
+	rule_part, _ := extract_inline_comment(line)
+	parts := rule_part.trim_space().split(' ')
+
+	mut redirect_kw := ''
+	mut target := ''
+
+	mut i := 0
+	for i < parts.len {
+		part := parts[i]
+		if part in ['nat-to', 'rdr-to', 'binat-to', 'af-to'] {
+			redirect_kw = part
+			if i + 1 < parts.len {
+				i++
+				// Collect a parenthesized target like "(egress:0)" or a single token
+				if parts[i].starts_with('(') && !parts[i].ends_with(')') {
+					mut tparts := []string{}
+					for i < parts.len && !parts[i].ends_with(')') {
+						tparts << parts[i]
+						i++
+					}
+					if i < parts.len {
+						tparts << parts[i]
+						i++
+					}
+					target = tparts.join(' ')
+				} else {
+					target = parts[i]
+					i++
+				}
+			}
+		} else {
+			i++
+		}
+	}
+
+	return redirect_kw, target
 }
 
 // Parse an include line (e.g., 'include "/etc/pf.macros"' -> "/etc/pf.macros")

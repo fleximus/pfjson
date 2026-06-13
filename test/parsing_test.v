@@ -381,6 +381,62 @@ fn test_scrub_rules_conversion() {
 	}
 }
 
+fn test_match_rules_conversion() {
+	// Test match rule configurations
+	match_tests := [
+		// Scrub normalization via match
+		'match in all scrub (no-df random-id)',
+		// NAT via match
+		'match out on egress inet from 10.0.0.0/8 to any nat-to (egress)',
+		// RDR via match
+		'match in on egress proto tcp from any to any port 80 rdr-to 10.0.0.1',
+	]
+
+	for i, test_content in match_tests {
+		test_file := 'test_match_${i}.conf'
+		json_file := 'test_match_${i}.json'
+		output_file := 'test_match_${i}_output.conf'
+
+		os.write_file(test_file, test_content) or { panic(err) }
+
+		// Encode to JSON
+		encode_result := os.execute('./pfjson -e -f ${test_file} ${json_file}')
+		assert encode_result.exit_code == 0
+		assert os.exists(json_file)
+
+		json_content := os.read_file(json_file) or { panic(err) }
+		assert json_content.contains('"line_type":	"match"')
+		assert json_content.contains('"action":	"match"')
+		if test_content.contains('nat-to') {
+			assert json_content.contains('"rule_type":	"nat-to"')
+			assert json_content.contains('"target":	"(egress)"')
+		}
+		if test_content.contains('rdr-to') {
+			assert json_content.contains('"rule_type":	"rdr-to"')
+			assert json_content.contains('"target":	"10.0.0.1"')
+		}
+
+		// A valid match line must pass the syntax check
+		check_result := os.execute('./pfjson -e -c ${test_file}')
+		assert check_result.exit_code == 0, 'Syntax check failed for match test ${i}'
+
+		// Test json -> conf conversion
+		decode_result := os.execute('./pfjson -d -f ${json_file} ${output_file}')
+		assert decode_result.exit_code == 0
+		assert os.exists(output_file)
+
+		// Verify round-trip fidelity
+		original_content := os.read_file(test_file) or { panic(err) }
+		output_content := os.read_file(output_file) or { panic(err) }
+		assert original_content == output_content, 'Round-trip conversion failed for match test ${i}'
+
+		// Clean up
+		os.rm(test_file) or {}
+		os.rm(json_file) or {}
+		os.rm(output_file) or {}
+	}
+}
+
 fn test_include_load_flags_conversion() {
 	// Test include, load anchor, and TCP flags parsing
 	cases := [

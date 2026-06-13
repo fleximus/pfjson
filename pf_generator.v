@@ -94,13 +94,13 @@ fn generate_pf_conf_from_lines(lines []PfLine) !string {
 					output << load_line
 				}
 			}
-			'nat', 'rdr', 'rule' {
+			'nat', 'rdr', 'rule', 'match' {
 				if line.raw_line != '' {
 					output << line.raw_line
 				} else {
 					// Reconstruct rule from parsed components
 					mut rule_parts := []string{}
-					
+
 					if line.line_type == 'nat' || line.line_type == 'rdr' {
 						if line.rule_type != '' {
 							rule_parts << line.rule_type
@@ -172,7 +172,12 @@ fn generate_pf_conf_from_lines(lines []PfLine) !string {
 					}
 
 					if line.target != '' {
-						rule_parts << '-> ${line.target}'
+						if line.line_type == 'match' && line.rule_type != '' {
+							// match redirection: nat-to / rdr-to / binat-to / af-to
+							rule_parts << '${line.rule_type} ${line.target}'
+						} else {
+							rule_parts << '-> ${line.target}'
+						}
 					}
 					
 					if line.options.len > 0 {
