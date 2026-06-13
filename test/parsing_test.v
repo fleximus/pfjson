@@ -381,6 +381,64 @@ fn test_scrub_rules_conversion() {
 	}
 }
 
+fn test_queue_altq_conversion() {
+	// Test altq declarations and queue definitions
+	queue_tests := [
+		// altq with a queue list
+		'altq on \$ext_if cbq bandwidth 10Mb queue { std, ssh, ftp }',
+		// queue with a scheduler option
+		'queue std bandwidth 50% cbq(default)',
+		// queue with subqueues
+		'queue ssh bandwidth 10% { ssh_login, ssh_bulk }',
+		// queue on an interface
+		'queue rootq on \$ext_if bandwidth 1G',
+	]
+
+	for i, test_content in queue_tests {
+		test_file := 'test_queue_${i}.conf'
+		json_file := 'test_queue_${i}.json'
+		output_file := 'test_queue_${i}_output.conf'
+
+		os.write_file(test_file, test_content) or { panic(err) }
+
+		// Encode to JSON
+		encode_result := os.execute('./pfjson -e -f ${test_file} ${json_file}')
+		assert encode_result.exit_code == 0
+		assert os.exists(json_file)
+
+		json_content := os.read_file(json_file) or { panic(err) }
+		if test_content.starts_with('altq') {
+			assert json_content.contains('"line_type":	"altq"')
+			assert json_content.contains('"values":	["std", "ssh", "ftp"]')
+		} else {
+			assert json_content.contains('"line_type":	"queue"')
+		}
+		if test_content.contains('queue ssh ') {
+			assert json_content.contains('"name":	"ssh"')
+			assert json_content.contains('"values":	["ssh_login", "ssh_bulk"]')
+		}
+
+		// A valid queue/altq line must pass the syntax check
+		check_result := os.execute('./pfjson -e -c ${test_file}')
+		assert check_result.exit_code == 0, 'Syntax check failed for queue test ${i}'
+
+		// Test json -> conf conversion
+		decode_result := os.execute('./pfjson -d -f ${json_file} ${output_file}')
+		assert decode_result.exit_code == 0
+		assert os.exists(output_file)
+
+		// Verify round-trip fidelity
+		original_content := os.read_file(test_file) or { panic(err) }
+		output_content := os.read_file(output_file) or { panic(err) }
+		assert original_content == output_content, 'Round-trip conversion failed for queue test ${i}'
+
+		// Clean up
+		os.rm(test_file) or {}
+		os.rm(json_file) or {}
+		os.rm(output_file) or {}
+	}
+}
+
 fn test_anchor_blocks_conversion() {
 	// Anchor blocks span multiple lines; test structure + round-trip fidelity.
 	anchor_configs := [

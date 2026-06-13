@@ -100,6 +100,40 @@ fn generate_pf_conf_from_lines(lines []PfLine) !string {
 					output << '}'
 				}
 			}
+			'altq' {
+				if line.raw_line != '' {
+					output << line.raw_line
+				} else {
+					mut altq_line := 'altq'
+					if line.interfaces.len > 0 {
+						altq_line += ' on ${line.interfaces[0]}'
+					}
+					if line.definition != '' {
+						altq_line += ' ${line.definition}'
+					}
+					if line.values.len > 0 {
+						altq_line += ' queue { ${line.values.join(', ')} }'
+					}
+					output << altq_line
+				}
+			}
+			'queue' {
+				if line.raw_line != '' {
+					output << line.raw_line
+				} else {
+					mut queue_line := 'queue ${line.name}'
+					if line.interfaces.len > 0 {
+						queue_line += ' on ${line.interfaces[0]}'
+					}
+					if line.definition != '' {
+						queue_line += ' ${line.definition}'
+					}
+					if line.values.len > 0 {
+						queue_line += ' { ${line.values.join(', ')} }'
+					}
+					output << queue_line
+				}
+			}
 			'include' {
 				if line.raw_line != '' {
 					output << line.raw_line

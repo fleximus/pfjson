@@ -208,6 +208,33 @@ fn parse_pf_conf_lines(content string) ![]PfLine {
 				redirect_kw, redirect_target := parse_match_redirection(line)
 				pf_line.rule_type = redirect_kw
 				pf_line.target = redirect_target
+			} else if trimmed.starts_with('altq ') {
+				pf_line.line_type = 'altq'
+				altq_iface, altq_params, altq_queues := parse_altq_line(line)
+				if altq_iface != '' {
+					pf_line.interfaces = [altq_iface]
+				}
+				pf_line.definition = altq_params
+				pf_line.values = altq_queues
+				pf_line.raw_line = line  // Preserve original line for exact formatting
+				_, inline_comment := extract_inline_comment(line)
+				if inline_comment != '' {
+					pf_line.comment = inline_comment
+				}
+			} else if trimmed.starts_with('queue ') {
+				pf_line.line_type = 'queue'
+				queue_name, queue_iface, queue_params, queue_subs := parse_queue_line(line)
+				pf_line.name = queue_name
+				if queue_iface != '' {
+					pf_line.interfaces = [queue_iface]
+				}
+				pf_line.definition = queue_params
+				pf_line.values = queue_subs
+				pf_line.raw_line = line  // Preserve original line for exact formatting
+				_, inline_comment := extract_inline_comment(line)
+				if inline_comment != '' {
+					pf_line.comment = inline_comment
+				}
 			} else if trimmed.starts_with('pass ') || trimmed.starts_with('block ') {
 				pf_line.line_type = 'rule'
 				pf_line.raw_line = line  // Preserve original line for exact formatting
@@ -1008,6 +1035,102 @@ fn parse_scrub_line(line string) (string, string, []string) {
 	}
 
 	return direction, iface, options
+}
+
+// Parse an altq declaration
+// (e.g., "altq on $ext_if cbq bandwidth 10Mb queue { std, ssh }"
+//  -> ("$ext_if", "cbq bandwidth 10Mb", ["std", "ssh"])).
+fn parse_altq_line(line string) (string, string, []string) {
+	rule_part, _ := extract_inline_comment(line)
+	mut rest := rule_part.trim_space()
+	if rest.starts_with('altq') {
+		rest = rest[4..].trim_space()
+	}
+
+	// Extract the "queue { list }" portion.
+	mut queues := []string{}
+	if qpos := rest.index('queue') {
+		after := rest[qpos + 5..]
+		if lb := after.index('{') {
+			if rb := after.index('}') {
+				for item in after[lb + 1..rb].split(',') {
+					cleaned := item.trim_space()
+					if cleaned != '' {
+						queues << cleaned
+					}
+				}
+			}
+		}
+		rest = rest[..qpos].trim_space()
+	}
+
+	// Extract the interface from "on <if>"; the rest is scheduler/params.
+	parts := rest.split(' ')
+	mut iface := ''
+	mut params := []string{}
+	mut i := 0
+	for i < parts.len {
+		if parts[i] == 'on' && i + 1 < parts.len {
+			iface = parts[i + 1]
+			i += 2
+		} else {
+			if parts[i] != '' {
+				params << parts[i]
+			}
+			i++
+		}
+	}
+
+	return iface, params.join(' '), queues
+}
+
+// Parse a queue definition
+// (e.g., "queue ssh bandwidth 10% { ssh_login, ssh_bulk }"
+//  -> ("ssh", "", "bandwidth 10%", ["ssh_login", "ssh_bulk"])).
+fn parse_queue_line(line string) (string, string, string, []string) {
+	rule_part, _ := extract_inline_comment(line)
+	mut rest := rule_part.trim_space()
+	if rest.starts_with('queue') {
+		rest = rest[5..].trim_space()
+	}
+
+	// Extract the subqueue list "{ ... }".
+	mut subqueues := []string{}
+	if lb := rest.index('{') {
+		if rb := rest.index('}') {
+			for item in rest[lb + 1..rb].split(',') {
+				cleaned := item.trim_space()
+				if cleaned != '' {
+					subqueues << cleaned
+				}
+			}
+			rest = (rest[..lb] + rest[rb + 1..]).trim_space()
+		}
+	}
+
+	// First token is the queue name; pull out "on <if>"; the rest are params.
+	parts := rest.split(' ')
+	mut name := ''
+	mut iface := ''
+	mut params := []string{}
+	mut i := 0
+	if parts.len > 0 {
+		name = parts[0]
+		i = 1
+	}
+	for i < parts.len {
+		if parts[i] == 'on' && i + 1 < parts.len {
+			iface = parts[i + 1]
+			i += 2
+		} else {
+			if parts[i] != '' {
+				params << parts[i]
+			}
+			i++
+		}
+	}
+
+	return name, iface, params.join(' '), subqueues
 }
 
 // Parse an anchor line into its components.
