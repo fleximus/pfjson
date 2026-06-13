@@ -4,7 +4,7 @@ import os
 import flag
 import json
 
-const app_version = '0.9.0'
+const app_version = '0.10.0'
 const app_name = 'pfjson'
 const app_author = 'Felix Ehlers'
 const app_license = 'MIT License'

@@ -57,7 +57,7 @@ pfjson -c -e /etc/pf.conf
 
 ```bash
 $ pfjson -h
-pfjson v0.9.0
+pfjson v0.10.0
 Author: Felix Ehlers
 License: MIT License
 -----------------------------------------------
