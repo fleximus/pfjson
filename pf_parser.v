@@ -57,13 +57,21 @@ fn parse_pf_conf_lines(content string) ![]PfLine {
 				if inline_comment != '' {
 					pf_line.comment = inline_comment
 				}
-			} else if trimmed.starts_with('nat ') || trimmed.starts_with('rdr ') || trimmed.starts_with('no nat ') {
-				pf_line.line_type = if trimmed.starts_with('nat ') || trimmed.starts_with('no nat ') { 'nat' } else { 'rdr' }
+			} else if trimmed.starts_with('nat ') || trimmed.starts_with('rdr ') || trimmed.starts_with('no nat ') || trimmed.starts_with('binat ') {
+				is_binat := trimmed.starts_with('binat ')
+				pf_line.line_type = if trimmed.starts_with('rdr ') {
+					'rdr'
+				} else if is_binat {
+					'binat'
+				} else {
+					'nat'
+				}
 
-				// Parse NAT/RDR components
-				if trimmed.starts_with('nat ') || trimmed.starts_with('no nat ') {
+				// Parse NAT/binat/RDR components
+				if !trimmed.starts_with('rdr ') {
 					rule_type, direction, quick, log, iface, inet_family, protocol, source, destination, ports, options, label, tag, tagged, dup_to := parse_nat_rule_line(line)
-					pf_line.rule_type = rule_type
+					// binat has no nat-style rule_type; let the generator fall back to the line_type
+					pf_line.rule_type = if is_binat { '' } else { rule_type }
 					pf_line.direction = direction
 					pf_line.quick = quick
 					pf_line.log = log
@@ -156,6 +164,18 @@ fn parse_pf_conf_lines(content string) ![]PfLine {
 				load_name, load_path := parse_load_anchor_line(line)
 				pf_line.name = load_name
 				pf_line.value = load_path
+				pf_line.raw_line = line  // Preserve original line for exact formatting
+				_, inline_comment := extract_inline_comment(line)
+				if inline_comment != '' {
+					pf_line.comment = inline_comment
+				}
+			} else if trimmed.starts_with('nat-anchor ') || trimmed.starts_with('rdr-anchor ')
+				|| trimmed.starts_with('binat-anchor ') {
+				pf_line.line_type = trimmed.split(' ')[0] // nat-anchor / rdr-anchor / binat-anchor
+				anchor_name, anchor_condition, opens_block := parse_anchor_line(line)
+				pf_line.name = anchor_name
+				pf_line.definition = anchor_condition
+				pf_line.block_open = opens_block
 				pf_line.raw_line = line  // Preserve original line for exact formatting
 				_, inline_comment := extract_inline_comment(line)
 				if inline_comment != '' {
@@ -1157,18 +1177,20 @@ fn parse_queue_line(line string) (string, string, string, []string) {
 	return name, iface, params.join(' '), subqueues
 }
 
-// Parse an anchor line into its components.
-// Handles inline references ('anchor "ftp/*"'), conditional anchors
-// ('anchor "spam" in on egress ...'), and block openers ('anchor "x" {').
-// Returns (name, condition, opens_block).
+// Parse an anchor line into its components. Handles plain anchors and the
+// nat-anchor / rdr-anchor / binat-anchor variants: inline references
+// ('anchor "ftp/*"'), conditional anchors ('anchor "spam" in on egress ...'),
+// and block openers ('anchor "x" {'). Returns (name, condition, opens_block).
 fn parse_anchor_line(line string) (string, string, bool) {
 	rule_part, _ := extract_inline_comment(line)
 	trimmed := rule_part.trim_space()
-	if !trimmed.starts_with('anchor') {
+	// Strip the leading anchor keyword (anchor / nat-anchor / rdr-anchor / binat-anchor).
+	keyword := trimmed.split(' ')[0]
+	if !keyword.ends_with('anchor') {
 		return '', '', false
 	}
 
-	mut rest := trimmed[6..].trim_space() // after 'anchor'
+	mut rest := trimmed[keyword.len..].trim_space() // after the anchor keyword
 	mut opens_block := false
 	if rest.ends_with('{') {
 		opens_block = true

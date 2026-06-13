@@ -76,11 +76,11 @@ fn generate_pf_conf_from_lines(lines []PfLine) !string {
 					output << scrub_line
 				}
 			}
-			'anchor' {
+			'anchor', 'nat-anchor', 'rdr-anchor', 'binat-anchor' {
 				if line.raw_line != '' {
 					output << line.raw_line
 				} else {
-					mut anchor_line := 'anchor'
+					mut anchor_line := line.line_type
 					if line.name != '' {
 						anchor_line += ' "${line.name}"'
 					}
@@ -152,14 +152,14 @@ fn generate_pf_conf_from_lines(lines []PfLine) !string {
 					output << load_line
 				}
 			}
-			'nat', 'rdr', 'rule', 'match' {
+			'nat', 'rdr', 'rule', 'match', 'binat' {
 				if line.raw_line != '' {
 					output << line.raw_line
 				} else {
 					// Reconstruct rule from parsed components
 					mut rule_parts := []string{}
 
-					if line.line_type == 'nat' || line.line_type == 'rdr' {
+					if line.line_type == 'nat' || line.line_type == 'rdr' || line.line_type == 'binat' {
 						if line.rule_type != '' {
 							rule_parts << line.rule_type
 						} else {

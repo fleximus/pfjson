@@ -381,6 +381,54 @@ fn test_scrub_rules_conversion() {
 	}
 }
 
+fn test_binat_and_anchor_variants() {
+	// binat rules and the nat-anchor / rdr-anchor / binat-anchor reference forms
+	cases := [
+		'binat on \$ext_if from \$web to any -> \$pubweb',
+		'nat-anchor "ftp-proxy/*"',
+		'rdr-anchor "ftp-proxy/*"',
+		'binat-anchor "example"',
+	]
+
+	for i, test_content in cases {
+		test_file := 'test_binat_${i}.conf'
+		json_file := 'test_binat_${i}.json'
+		output_file := 'test_binat_${i}_output.conf'
+
+		os.write_file(test_file, test_content) or { panic(err) }
+
+		encode_result := os.execute('./pfjson -e -f ${test_file} ${json_file}')
+		assert encode_result.exit_code == 0
+
+		json_content := os.read_file(json_file) or { panic(err) }
+		if test_content.starts_with('binat ') {
+			assert json_content.contains('"line_type":	"binat"')
+		}
+		if test_content.starts_with('nat-anchor') {
+			assert json_content.contains('"line_type":	"nat-anchor"')
+			assert json_content.contains('"name":	"ftp-proxy/*"')
+		}
+		if test_content.starts_with('binat-anchor') {
+			assert json_content.contains('"line_type":	"binat-anchor"')
+		}
+
+		// None of these may be reported as unrecognized syntax
+		check_result := os.execute('./pfjson -e -c ${test_file}')
+		assert check_result.exit_code == 0, 'Syntax check failed for binat/anchor test ${i}'
+
+		decode_result := os.execute('./pfjson -d -f ${json_file} ${output_file}')
+		assert decode_result.exit_code == 0
+
+		original_content := os.read_file(test_file) or { panic(err) }
+		output_content := os.read_file(output_file) or { panic(err) }
+		assert original_content == output_content, 'Round-trip failed for binat/anchor test ${i}'
+
+		os.rm(test_file) or {}
+		os.rm(json_file) or {}
+		os.rm(output_file) or {}
+	}
+}
+
 fn test_to_port_without_destination() {
 	// "to port N" has no destination address: 'port' must not be parsed as
 	// the destination, and the destination field must stay empty.

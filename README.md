@@ -18,8 +18,8 @@ A CLI tool to convert OpenBSD Packet Filter configuration files (`pf.conf`) to J
   - Filter rules (pass/block), including TCP `flags`, `route-to`/`reply-to`/`dup-to`,
     `user`/`group`, `rtable`, `probability`, `received-on`, `divert-to`, `set prio`
   - Match rules (incl. `nat-to`/`rdr-to` redirection)
-  - Anchors, including nested `{ … }` blocks
-  - NAT and RDR rules
+  - Anchors (incl. nested `{ … }` blocks and `nat-anchor`/`rdr-anchor`/`binat-anchor`)
+  - NAT, RDR, and binat rules
   - Scrub rules
   - Antispoof rules
   - Queueing (`altq` / `queue`)
