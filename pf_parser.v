@@ -442,7 +442,9 @@ fn parse_rule_line(line string) (string, string, bool, string, string, string, s
 				}
 			}
 			'to' {
-				if i + 1 < parts.len {
+				// "to port N" has no destination address; leave 'port' for the
+				// port handler rather than consuming it as the destination.
+				if i + 1 < parts.len && parts[i + 1] != 'port' {
 					i++
 					// Handle complex destinations
 					if parts[i].starts_with('{') || parts[i].starts_with('<') {

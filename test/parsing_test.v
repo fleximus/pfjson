@@ -381,6 +381,36 @@ fn test_scrub_rules_conversion() {
 	}
 }
 
+fn test_to_port_without_destination() {
+	// "to port N" has no destination address: 'port' must not be parsed as
+	// the destination, and the destination field must stay empty.
+	test_file := 'test_toport.conf'
+	json_file := 'test_toport.json'
+	output_file := 'test_toport_output.conf'
+
+	content := 'pass in on \$ext_if proto tcp to port 22'
+	os.write_file(test_file, content) or { panic(err) }
+
+	encode_result := os.execute('./pfjson -e -f ${test_file} ${json_file}')
+	assert encode_result.exit_code == 0
+
+	json_content := os.read_file(json_file) or { panic(err) }
+	assert json_content.contains('"ports":	["22"]')
+	// No destination should have been captured (in particular, not "port").
+	assert !json_content.contains('"destinations"'), 'destination must be empty for "to port N"'
+
+	// Round-trip fidelity
+	decode_result := os.execute('./pfjson -d -f ${json_file} ${output_file}')
+	assert decode_result.exit_code == 0
+	original_content := os.read_file(test_file) or { panic(err) }
+	output_content := os.read_file(output_file) or { panic(err) }
+	assert original_content == output_content, 'Round-trip failed for "to port N"'
+
+	os.rm(test_file) or {}
+	os.rm(json_file) or {}
+	os.rm(output_file) or {}
+}
+
 fn test_rule_modifiers_conversion() {
 	// Test user/group/rtable/probability/received-on/divert-to/set-prio modifiers
 	modifier_tests := [
