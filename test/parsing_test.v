@@ -381,6 +381,64 @@ fn test_scrub_rules_conversion() {
 	}
 }
 
+fn test_policy_routing_conversion() {
+	// Test route-to / reply-to / dup-to policy-routing modifiers on rules
+	routing_tests := [
+		// route-to with (interface address)
+		'pass out on \$ext_if route-to (em1 192.168.2.1) from any to any',
+		// reply-to with (interface address)
+		'pass in on \$ext_if reply-to (em0 10.0.0.1) proto tcp to port 80',
+		// route-to round-robin pool
+		'pass out route-to { (em1 1.1.1.1), (em2 2.2.2.2) } from any to any',
+		// dup-to (already supported, kept for regression)
+		'pass in on \$int_if dup-to (\$monitor_if 192.168.100.1) from any to any',
+	]
+
+	for i, test_content in routing_tests {
+		test_file := 'test_routing_${i}.conf'
+		json_file := 'test_routing_${i}.json'
+		output_file := 'test_routing_${i}_output.conf'
+
+		os.write_file(test_file, test_content) or { panic(err) }
+
+		// Encode to JSON
+		encode_result := os.execute('./pfjson -e -f ${test_file} ${json_file}')
+		assert encode_result.exit_code == 0
+		assert os.exists(json_file)
+
+		json_content := os.read_file(json_file) or { panic(err) }
+		assert json_content.contains('"line_type":	"rule"')
+		if test_content.contains('route-to') {
+			assert json_content.contains('"route_to"')
+		}
+		if test_content.contains('reply-to') {
+			assert json_content.contains('"reply_to":	"(em0 10.0.0.1)"')
+		}
+		if test_content.contains('dup-to') {
+			assert json_content.contains('"dup_to"')
+		}
+
+		// Must pass the syntax check
+		check_result := os.execute('./pfjson -e -c ${test_file}')
+		assert check_result.exit_code == 0, 'Syntax check failed for routing test ${i}'
+
+		// Test json -> conf conversion
+		decode_result := os.execute('./pfjson -d -f ${json_file} ${output_file}')
+		assert decode_result.exit_code == 0
+		assert os.exists(output_file)
+
+		// Verify round-trip fidelity
+		original_content := os.read_file(test_file) or { panic(err) }
+		output_content := os.read_file(output_file) or { panic(err) }
+		assert original_content == output_content, 'Round-trip conversion failed for routing test ${i}'
+
+		// Clean up
+		os.rm(test_file) or {}
+		os.rm(json_file) or {}
+		os.rm(output_file) or {}
+	}
+}
+
 fn test_queue_altq_conversion() {
 	// Test altq declarations and queue definitions
 	queue_tests := [

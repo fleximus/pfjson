@@ -15,7 +15,7 @@ A CLI tool to convert OpenBSD Packet Filter configuration files (`pf.conf`) to J
 - Parsing of common pf.conf elements:
   - Macros and variables
   - Tables with IP/hostname entries
-  - Filter rules (pass/block), including TCP `flags`
+  - Filter rules (pass/block), including TCP `flags` and `route-to`/`reply-to`/`dup-to`
   - Match rules (incl. `nat-to`/`rdr-to` redirection)
   - Anchors, including nested `{ … }` blocks
   - NAT and RDR rules
@@ -234,7 +234,7 @@ Error decoding: Checksum verification failed - output does not match original me
 
 > **Note:** `-c` validates the subset of pf.conf that pfjson recognizes. Lines it
 > cannot classify, and a few rule modifiers it does not yet break out (e.g.
-> `route-to`/`reply-to`, `divert-to`, `set prio`), are preserved verbatim but
+> `divert-to`, `set prio`, `probability`, user/group), are preserved verbatim but
 > reported as "unrecognized or unsupported syntax". The checker cannot distinguish
 > unsupported from invalid; for full grammar validation, use `pfctl -nf`.
 

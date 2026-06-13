@@ -203,6 +203,9 @@ fn parse_pf_conf_lines(content string) ![]PfLine {
 				pf_line.flags = flags
 				pf_line.icmp_type = icmp_type
 				pf_line.icmp6_type = icmp6_type
+				route_to, reply_to := parse_rule_routing(line)
+				pf_line.route_to = route_to
+				pf_line.reply_to = reply_to
 
 				// Capture the match-specific redirection action, if any.
 				redirect_kw, redirect_target := parse_match_redirection(line)
@@ -263,6 +266,9 @@ fn parse_pf_conf_lines(content string) ![]PfLine {
 				pf_line.flags = flags
 				pf_line.icmp_type = icmp_type
 				pf_line.icmp6_type = icmp6_type
+				route_to, reply_to := parse_rule_routing(line)
+				pf_line.route_to = route_to
+				pf_line.reply_to = reply_to
 			} else {
 				pf_line.line_type = 'unknown'
 				pf_line.raw_line = line  // Preserve original line for exact formatting
@@ -1175,6 +1181,56 @@ fn parse_anchor_line(line string) (string, string, bool) {
 	}
 
 	return name, condition, opens_block
+}
+
+// Extract route-to / reply-to targets from a filter rule line.
+// A target may be a single host, an "(interface address)" pair, or a
+// "{ ... }" round-robin pool. Returns (route_to, reply_to).
+fn parse_rule_routing(line string) (string, string) {
+	rule_part, _ := extract_inline_comment(line)
+	parts := rule_part.trim_space().split(' ')
+
+	mut route_to := ''
+	mut reply_to := ''
+
+	mut i := 0
+	for i < parts.len {
+		part := parts[i]
+		if part == 'route-to' || part == 'reply-to' {
+			mut target := ''
+			if i + 1 < parts.len {
+				i++
+				open := parts[i]
+				is_paren := open.starts_with('(') && !open.ends_with(')')
+				is_brace := open.starts_with('{') && !open.ends_with('}')
+				if is_paren || is_brace {
+					close_ch := if is_paren { ')' } else { '}' }
+					mut tparts := []string{}
+					for i < parts.len && !parts[i].ends_with(close_ch) {
+						tparts << parts[i]
+						i++
+					}
+					if i < parts.len {
+						tparts << parts[i]
+						i++
+					}
+					target = tparts.join(' ')
+				} else {
+					target = open
+					i++
+				}
+			}
+			if part == 'route-to' {
+				route_to = target
+			} else {
+				reply_to = target
+			}
+		} else {
+			i++
+		}
+	}
+
+	return route_to, reply_to
 }
 
 // Parse the redirection action of a match rule (nat-to / rdr-to / binat-to / af-to).

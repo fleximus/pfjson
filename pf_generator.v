@@ -257,6 +257,14 @@ fn generate_pf_conf_from_lines(lines []PfLine) !string {
 					if line.dup_to != '' {
 						rule_parts << 'dup-to ${line.dup_to}'
 					}
+
+					if line.route_to != '' {
+						rule_parts << 'route-to ${line.route_to}'
+					}
+
+					if line.reply_to != '' {
+						rule_parts << 'reply-to ${line.reply_to}'
+					}
 					
 					mut rule_line := rule_parts.join(' ')
 					
