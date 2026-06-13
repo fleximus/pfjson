@@ -76,6 +76,30 @@ fn generate_pf_conf_from_lines(lines []PfLine) !string {
 					output << scrub_line
 				}
 			}
+			'anchor' {
+				if line.raw_line != '' {
+					output << line.raw_line
+				} else {
+					mut anchor_line := 'anchor'
+					if line.name != '' {
+						anchor_line += ' "${line.name}"'
+					}
+					if line.definition != '' {
+						anchor_line += ' ${line.definition}'
+					}
+					if line.block_open {
+						anchor_line += ' {'
+					}
+					output << anchor_line
+				}
+			}
+			'anchor-close' {
+				if line.raw_line != '' {
+					output << line.raw_line
+				} else {
+					output << '}'
+				}
+			}
 			'include' {
 				if line.raw_line != '' {
 					output << line.raw_line

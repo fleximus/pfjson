@@ -161,6 +161,20 @@ fn parse_pf_conf_lines(content string) ![]PfLine {
 				if inline_comment != '' {
 					pf_line.comment = inline_comment
 				}
+			} else if trimmed.starts_with('anchor ') {
+				pf_line.line_type = 'anchor'
+				anchor_name, anchor_condition, opens_block := parse_anchor_line(line)
+				pf_line.name = anchor_name
+				pf_line.definition = anchor_condition
+				pf_line.block_open = opens_block
+				pf_line.raw_line = line  // Preserve original line for exact formatting
+				_, inline_comment := extract_inline_comment(line)
+				if inline_comment != '' {
+					pf_line.comment = inline_comment
+				}
+			} else if trimmed == '}' {
+				pf_line.line_type = 'anchor-close'
+				pf_line.raw_line = line  // Preserve original line for exact formatting
 			} else if trimmed.starts_with('match ') {
 				pf_line.line_type = 'match'
 				pf_line.raw_line = line  // Preserve original line for exact formatting
@@ -994,6 +1008,50 @@ fn parse_scrub_line(line string) (string, string, []string) {
 	}
 
 	return direction, iface, options
+}
+
+// Parse an anchor line into its components.
+// Handles inline references ('anchor "ftp/*"'), conditional anchors
+// ('anchor "spam" in on egress ...'), and block openers ('anchor "x" {').
+// Returns (name, condition, opens_block).
+fn parse_anchor_line(line string) (string, string, bool) {
+	rule_part, _ := extract_inline_comment(line)
+	trimmed := rule_part.trim_space()
+	if !trimmed.starts_with('anchor') {
+		return '', '', false
+	}
+
+	mut rest := trimmed[6..].trim_space() // after 'anchor'
+	mut opens_block := false
+	if rest.ends_with('{') {
+		opens_block = true
+		rest = rest[..rest.len - 1].trim_space()
+	}
+
+	mut name := ''
+	mut condition := ''
+	if rest.starts_with('"') {
+		// Quoted name; anything after the closing quote is the condition.
+		if q := rest[1..].index('"') {
+			name = rest[1..1 + q]
+			condition = rest[1 + q + 1..].trim_space()
+		} else {
+			name = rest.trim('"')
+		}
+	} else if rest != '' {
+		// A bareword name, unless the first token is a condition keyword
+		// (anonymous anchor with a filter condition).
+		parts := rest.split(' ')
+		first := parts[0]
+		if first in ['in', 'out', 'on', 'inet', 'inet6', 'proto', 'from', 'to'] {
+			condition = rest
+		} else {
+			name = first
+			condition = rest[first.len..].trim_space()
+		}
+	}
+
+	return name, condition, opens_block
 }
 
 // Parse the redirection action of a match rule (nat-to / rdr-to / binat-to / af-to).

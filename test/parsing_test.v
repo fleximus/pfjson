@@ -381,6 +381,63 @@ fn test_scrub_rules_conversion() {
 	}
 }
 
+fn test_anchor_blocks_conversion() {
+	// Anchor blocks span multiple lines; test structure + round-trip fidelity.
+	anchor_configs := [
+		// Block anchor with inner rules
+		'anchor "trusted" {\n    pass in proto tcp to port 22\n    pass out all\n}',
+		// Inline anchor reference
+		'anchor "ftp-proxy/*"',
+		// Conditional anchor (no block)
+		'anchor "spam" in on egress proto tcp from any to any port 25',
+		// Nested anchors
+		'anchor "outer" {\n    pass in all\n    anchor "inner" in on egress {\n        block out all\n    }\n}',
+	]
+
+	for i, test_content in anchor_configs {
+		test_file := 'test_anchor_${i}.conf'
+		json_file := 'test_anchor_${i}.json'
+		output_file := 'test_anchor_${i}_output.conf'
+
+		os.write_file(test_file, test_content) or { panic(err) }
+
+		// Encode to JSON
+		encode_result := os.execute('./pfjson -e -f ${test_file} ${json_file}')
+		assert encode_result.exit_code == 0
+		assert os.exists(json_file)
+
+		json_content := os.read_file(json_file) or { panic(err) }
+		assert json_content.contains('"line_type":	"anchor"')
+		if test_content.contains('{') {
+			assert json_content.contains('"block_open":	true')
+			assert json_content.contains('"line_type":	"anchor-close"')
+		}
+		if test_content.contains('"spam"') {
+			assert json_content.contains('"name":	"spam"')
+			assert json_content.contains('"definition"')
+		}
+
+		// Anchor blocks must pass the syntax check
+		check_result := os.execute('./pfjson -e -c ${test_file}')
+		assert check_result.exit_code == 0, 'Syntax check failed for anchor test ${i}'
+
+		// Test json -> conf conversion with strict verification
+		decode_result := os.execute('./pfjson -d -v -f ${json_file} ${output_file}')
+		assert decode_result.exit_code == 0, 'Strict verification failed for anchor test ${i}'
+		assert os.exists(output_file)
+
+		// Verify round-trip fidelity
+		original_content := os.read_file(test_file) or { panic(err) }
+		output_content := os.read_file(output_file) or { panic(err) }
+		assert original_content == output_content, 'Round-trip conversion failed for anchor test ${i}'
+
+		// Clean up
+		os.rm(test_file) or {}
+		os.rm(json_file) or {}
+		os.rm(output_file) or {}
+	}
+}
+
 fn test_match_rules_conversion() {
 	// Test match rule configurations
 	match_tests := [

@@ -10,6 +10,7 @@ mut:
 	name        string @[omitempty] // for macro lines (variable name)
 	value       string @[omitempty] // for macro lines (variable value)
 	definition  string @[omitempty] // for complex lines that need original content preserved
+	block_open  bool   @[omitempty] // anchor line opens a { } block
 
 	// Rule-specific fields (for line_type == 'rule')
 	action       string @[omitempty] // 'pass', 'block'
