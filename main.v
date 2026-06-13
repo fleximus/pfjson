@@ -103,16 +103,10 @@ fn main() {
 		// No arguments - use stdin for input
 		input_file = '-'
 	} else if actual_args.len == 1 {
-		// One argument - could be input file or output file (if stdin is implied)
-		// Check if it looks like a readable file
-		if actual_args[0] == '-' || os.exists(actual_args[0]) {
-			// It's an input file (stdin or existing file)
-			input_file = actual_args[0]
-		} else {
-			// It's likely an output file, assume stdin for input
-			input_file = '-'
-			output_file = actual_args[0]
-		}
+		// A single argument is always the input; output defaults to stdout.
+		// Use "-" for stdin. To write stdin to a file, give both explicitly:
+		// e.g. `pfjson -e - output.json`.
+		input_file = actual_args[0]
 	} else {
 		// Two or more arguments - first is input, second is output 
 		input_file = actual_args[0]

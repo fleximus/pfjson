@@ -214,8 +214,8 @@ $ pfjson -e -c broken.conf
 Syntax check: FAILED (1 error(s))
   line 5: unrecognized or unsupported syntax: this is not valid pf
 
-# File doesn't exist (input given explicitly)
-$ pfjson -e missing.conf out.json
+# File doesn't exist
+$ pfjson -e missing.conf
 Error encoding: Input file does not exist: missing.conf
 
 # Attempting to overwrite existing file
@@ -254,7 +254,7 @@ $ pfjson -d -j backup.json
 {"success":true,"message":"Checksum verification passed (from pf.conf)","data":{"sha256":"abc123...","sha512":"def456...","size":"2048"},"error":""}
 
 # Error handling
-$ pfjson -e -j missing.conf out.json
+$ pfjson -e -j missing.conf
 {"success":false,"message":"Encoding failed","data":{},"error":"Input file does not exist: missing.conf"}
 
 # Integration with jq for processing
